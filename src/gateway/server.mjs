@@ -1,8 +1,7 @@
 import { createServer } from "node:http";
 import crypto from "node:crypto";
 import { WebSocketServer } from "ws";
-import { generateAssistantReply } from "../model/openai.mjs";
-import { generateDoubaoReply } from "../model/doubao.mjs";
+import { generateAssistantReply } from "../model/client.mjs";
 import {
   isRequestFrame,
   makeError,
@@ -145,33 +144,19 @@ export function createGatewayServer(config) {
         if (frame.method === "agent") {
           const sessionId = String(frame.params?.sessionId ?? "main");
           const text = frame.params?.text ? String(frame.params?.text) : "";
-          const provider = String(config.defaultProvider).toLowerCase();
           const history = getSession(sessionId);
           if (text.trim()) {
             history.push({ role: "user", content: text.trim(), ts: Date.now() });
           }
 
-          const model = String(provider === "doubao" ? config.doubaoModel : config.openAiModel);
+          const provider = String(config.llm.provider);
+          const model = String(config.llm.model);
           const messages = history.map((entry) => ({ role: entry.role, content: entry.content }));
 
-          let reply;
-          if (provider === "doubao") {
-            reply = await generateDoubaoReply({
-              messages,
-              apiKey: config.doubaoApiKey,
-              model,
-              endpoint: config.doubaoEndpoint,
-            });
-          } else if (provider === "openai") {
-            reply = await generateAssistantReply({
-              messages,
-              apiKey: config.openAiApiKey,
-              model,
-            });
-          } else {
-            socket.send(JSON.stringify(badRequest(frame.id, `unsupported provider: ${provider}`)));
-            return;
-          }
+          const reply = await generateAssistantReply({
+            messages,
+            llm: config.llm,
+          });
 
           history.push({ role: "assistant", content: reply, ts: Date.now() });
 
