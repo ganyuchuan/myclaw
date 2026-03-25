@@ -9,6 +9,7 @@ This is a minimal Gateway-only MVP inspired by OpenClaw.
 - Minimal methods: `connect`, `health`, `send`, `agent`
 - In-memory sessions
 - Optional OpenAI call via Responses API
+- Optional Doubao call via ChatCompletions streaming API
 - HTTP health endpoint at `/health`
 
 ## Quick Start
@@ -35,8 +36,13 @@ npm start
 
 - `PORT`: gateway port (default `18789`)
 - `GATEWAY_TOKEN`: required token for websocket connect
+- `LLM_PROVIDER`: model provider for `agent` (default `openai`, supports `openai` or `doubao`)
 - `OPENAI_API_KEY`: optional, if empty uses fallback echo reply
 - `OPENAI_MODEL`: default `gpt-4.1-mini`
+- `DOUBAO_API_KEY`: optional, if empty uses fallback echo reply
+- `DOUBAO_MODEL`: default `doubao-1-5-pro-32k-250115`
+- `DOUBAO_ENDPOINT`: default `https://ark.cn-beijing.volces.com/api/v3/chat/completions`
+- Strict mode: `agent` requests do not allow `params.provider` or `params.model`; provider/model are fixed by `.env` at server startup.
 
 ## WebSocket Protocol (MVP)
 
@@ -61,7 +67,7 @@ Send message into session:
   "type": "req",
   "id": "2",
   "method": "send",
-  "params": { "sessionId": "main", "text": "hello" }
+  "params": { "sessionId": "main", "text": "你好" }
 }
 ```
 
