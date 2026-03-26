@@ -32,6 +32,12 @@ cp .env.example .env
 npm start
 ```
 
+4. (Optional) Start Feishu bridge MVP:
+
+```bash
+npm run bridge:feishu
+```
+
 ## Environment Variables
 
 - `PORT`: gateway port (default `18789`)
@@ -42,6 +48,17 @@ npm start
 - `LLM_MODEL`: model name
 - `LLM_API_KEY`: API key (optional; empty means fallback echo reply)
 - `LLM_STREAM`: stream mode for `chat_completions` (`true`/`false`)
+- `FEISHU_ENABLED`: enable Feishu bridge (`true`/`false`)
+- `FEISHU_APP_ID`: Feishu app id (required when bridge enabled)
+- `FEISHU_APP_SECRET`: Feishu app secret (required when bridge enabled)
+- `FEISHU_DOMAIN`: `feishu` or `lark`
+- `FEISHU_CONNECTION_MODE`: only `websocket` is supported in MVP
+- `FEISHU_REQUIRE_MENTION_IN_GROUP`: in group chat, require bot mention to trigger
+- `FEISHU_LOG_REPLY`: log outbound reply text in bridge logs (`true`/`false`, default `false`)
+- `FEISHU_GATEWAY_URL`: myclaw gateway websocket url
+- `FEISHU_GATEWAY_TOKEN`: gateway token used by feishu bridge
+- `FEISHU_CLIENT_ID`: feishu bridge client id used in gateway connect
+- `FEISHU_REQUEST_TIMEOUT_MS`: gateway request timeout for feishu bridge
 
 OpenAI Responses example:
 
@@ -102,6 +119,30 @@ Ask agent for response:
   "params": { "sessionId": "main" }
 }
 ```
+
+## Feishu Bridge MVP
+
+MVP scope:
+
+- Single account only (`FEISHU_APP_ID` + `FEISHU_APP_SECRET`).
+- Inbound event: `im.message.receive_v1` via Feishu WebSocket connection.
+- Text message only (`message_type=text`).
+- Group policy: only trigger when bot is mentioned if `FEISHU_REQUIRE_MENTION_IN_GROUP=true`.
+- Session mapping:
+  - DM: `feishu:dm:<senderOpenId>`
+  - Group: `feishu:group:<chatId>`
+- Outbound: reply text to original message (`im.message.reply`).
+
+Run:
+
+```bash
+npm run bridge:feishu
+```
+
+Notes:
+
+- This bridge assumes gateway is already running (`npm start`).
+- If `FEISHU_ENABLED=false`, the process will fail fast by design.
 
 ## Notes
 

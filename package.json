@@ -7,12 +7,14 @@
   "main": "src/index.mjs",
   "scripts": {
     "start": "node src/index.mjs",
-    "dev": "node --watch src/index.mjs"
+    "dev": "node --watch src/index.mjs",
+    "bridge:feishu": "node src/bridge/feishu.mjs"
   },
   "engines": {
     "node": ">=22"
   },
   "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.59.0",
     "dotenv": "^17.3.1",
     "ws": "^8.19.0"
   }
