@@ -226,6 +226,16 @@ dispatcher.register({
       
     const isCopilot = copilotCfg.enabled;
 
+    // 先贴一个"正在处理"的表情回应
+    try {
+      await feishuClient.im.messageReaction.create({
+        path: { message_id: messageId },
+        data: { reaction_type: { emoji_type: "OnIt" } },
+      });
+    } catch (e) {
+      console.warn(`[feishu-bridge] add reaction failed: ${e?.message ?? e}`);
+    }
+
     try {
       let reply;
 
@@ -261,6 +271,16 @@ dispatcher.register({
       });
     } catch (error) {
       console.error(`[feishu-bridge] handle message failed: ${String(error?.message ?? error)}`);
+      try {
+        await sendFeishuText({
+          feishuClient,
+          chatId,
+          replyToMessageId: messageId,
+          text: `[错误] ${String(error?.message ?? error).slice(0, 500)}`,
+        });
+      } catch (replyError) {
+        console.error(`[feishu-bridge] error reply failed: ${String(replyError?.message ?? replyError)}`);
+      }
     }
   },
 });
