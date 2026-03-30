@@ -115,6 +115,7 @@ function getFallbackReply(messages, provider) {
 }
 
 async function requestChatCompletions({ messages, llm }) {
+  console.log(`[client-model] request chat completions: ${llm.endpoint} with model <${llm.model}> and ${messages.length} messages`);
   const stream = parseBoolean(llm.stream, true);
   const response = await fetch(llm.endpoint, {
     method: "POST",
@@ -152,6 +153,7 @@ async function requestChatCompletions({ messages, llm }) {
 }
 
 async function requestResponses({ messages, llm }) {
+  console.log(`[client-model] request responses: ${llm.endpoint} with model <${llm.model}> and ${messages.length} messages`);
   const response = await fetch(llm.endpoint, {
     method: "POST",
     headers: {

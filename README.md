@@ -105,7 +105,7 @@ Send message into session:
   "type": "req",
   "id": "2",
   "method": "send",
-  "params": { "sessionId": "main", "text": "大语言模型中的 token 是什么？用一句话解释它" }
+  "params": { "sessionId": "main", "text": "Hi" }
 }
 ```
 
