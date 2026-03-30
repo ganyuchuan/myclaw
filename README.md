@@ -180,3 +180,56 @@ Response payload:
 ```json
 { "output": "git tag --sort=-creatordate" }
 ```
+
+## Feishu × Copilot 交互
+
+Feishu bridge 通过 `config.copilot.enabled` 全局切换消息路由：
+
+- `COPILOT_ENABLED=true`：所有飞书消息走 gateway `copilot` 方法（`gh copilot` CLI）
+- `COPILOT_ENABLED=false`：所有飞书消息走 `send` + `agent` 方法（LLM）
+
+交互流程：
+
+1. 收到飞书文本消息
+2. 对原消息贴飞书原生 `OnIt` 表情，提示用户"正在处理"
+3. 根据 `COPILOT_ENABLED` 分发到 copilot 或 agent
+4. 将结果以文本回复到原消息
+5. 处理过程中的任何错误都会以 `[错误] ...` 文本回复到原消息
+
+## 超时配置
+
+两个模块各自有独立超时控制，需注意链路上的依赖关系：
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `FEISHU_REQUEST_TIMEOUT_MS` | `15000` | Feishu bridge 等待 gateway 响应的超时 |
+| `COPILOT_TIMEOUT_MS` | `120000` | gateway 内 `gh copilot` 子进程执行超时 |
+
+重要：`FEISHU_REQUEST_TIMEOUT_MS` 必须 **大于** `COPILOT_TIMEOUT_MS`，否则 Feishu bridge 会在 copilot 尚未完成时提前超时。推荐配置：
+
+```dotenv
+COPILOT_TIMEOUT_MS=120000
+FEISHU_REQUEST_TIMEOUT_MS=130000
+```
+
+超时链路：`飞书用户等待` → `FEISHU_REQUEST_TIMEOUT_MS` → `gateway` → `COPILOT_TIMEOUT_MS` → `gh copilot 子进程`
+
+## 并发场景
+
+### 飞书同时发送多条消息
+
+每条消息触发独立的 async handler，在 `await` 处交替执行。
+
+- **Copilot 模式**：各请求独立 spawn `gh copilot` 子进程，互不干扰，无共享状态。注意多个 `gh copilot` 并行会消耗 CPU 和 API 配额。
+- **Agent 模式**：`send` → `agent` 两步非原子操作，同一 session 的多条消息可能交错写入 history。MVP 可接受，生产环境建议加 per-session 串行队列。
+
+### 飞书 + 本地终端发送同一条消息
+
+- Feishu bridge 按 `messageId` 去重，终端 WebSocket 无 messageId，两者不会互相去重
+- Copilot 模式：两个独立请求，各自返回结果，无冲突
+- Agent 模式：若 sessionId 相同，同一文本会被 push 两次进 history
+
+### MVP 结论
+
+- Copilot 模式下 **不需要加锁**
+- Agent 模式下 MVP 不加锁，生产环境建议对 sessionId 加 async mutex
