@@ -29,6 +29,13 @@ export const config = {
     apiKey: process.env.LLM_API_KEY?.trim() || "",
     stream: process.env.LLM_STREAM?.trim() || "false",
   },
+  copilot: {
+    enabled: toBool(process.env.COPILOT_ENABLED, true),
+    timeoutMs: toInt(process.env.COPILOT_TIMEOUT_MS, 120000),
+    model: process.env.COPILOT_MODEL?.trim() || "",
+    allowAllTools: toBool(process.env.COPILOT_ALLOW_ALL_TOOLS, true),
+    workDir: process.env.COPILOT_WORK_DIR?.trim() || "",
+  },
   feishu: {
     enabled: toBool(process.env.FEISHU_ENABLED, false),
     appId: process.env.FEISHU_APP_ID?.trim() || "",

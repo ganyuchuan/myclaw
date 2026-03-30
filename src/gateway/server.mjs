@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import crypto from "node:crypto";
 import { WebSocketServer } from "ws";
 import { generateAssistantReply } from "../model/client.mjs";
+import { runCopilot } from "../tool/copilot.mjs";
 import {
   isRequestFrame,
   makeError,
@@ -10,7 +11,7 @@ import {
   safeParseJson,
 } from "./protocol.mjs";
 
-const METHODS = ["connect", "send", "agent", "health"];
+const METHODS = ["connect", "send", "agent", "copilot", "health"];
 
 export function createGatewayServer(config) {
   const sessions = new Map();
@@ -169,6 +170,28 @@ export function createGatewayServer(config) {
                 reply,
                 historySize: history.length,
               }),
+            ),
+          );
+          return;
+        }
+
+        if (frame.method === "copilot") {
+          if (!config.copilot?.enabled) {
+            socket.send(JSON.stringify(badRequest(frame.id, "copilot tool is disabled")));
+            return;
+          }
+
+          const prompt = String(frame.params?.prompt ?? "").trim();
+          if (!prompt) {
+            socket.send(JSON.stringify(badRequest(frame.id, "copilot.prompt is required")));
+            return;
+          }
+
+          const output = await runCopilot({ prompt, config: config.copilot });
+
+          socket.send(
+            JSON.stringify(
+              makeResponse(frame.id, true, { output }),
             ),
           );
           return;
