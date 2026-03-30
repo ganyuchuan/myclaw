@@ -137,6 +137,8 @@ function assertConfig(feishuCfg) {
 const feishuCfg = config.feishu;
 assertConfig(feishuCfg);
 
+const copilotCfg = config.copilot;
+
 const gatewayClient = createGatewayClient({
   gatewayUrl: feishuCfg.gatewayUrl,
   gatewayToken: feishuCfg.gatewayToken,
@@ -221,11 +223,26 @@ dispatcher.register({
 
     const sessionId =
       chatType === "group" ? `feishu:group:${chatId}` : `feishu:dm:${senderOpenId}`;
+      
+    const isCopilot = copilotCfg.enabled;
 
     try {
-      await gatewayClient.request("send", { sessionId, text });
-      const agentPayload = await gatewayClient.request("agent", { sessionId });
-      const reply = String(agentPayload?.reply ?? "").trim();
+      let reply;
+
+      if (isCopilot) {
+        const prompt = text.trim();
+        if (!prompt) {
+          return;
+        }
+        console.log(`[feishu-bridge] copilot request from user=${senderOpenId} prompt=${clipText(prompt, 120)}`);
+        const copilotPayload = await gatewayClient.request("copilot", { prompt });
+        reply = String(copilotPayload?.output ?? "").trim();
+      } else {
+        await gatewayClient.request("send", { sessionId, text });
+        const agentPayload = await gatewayClient.request("agent", { sessionId });
+        reply = String(agentPayload?.reply ?? "").trim();
+      }
+
       if (!reply) {
         return;
       }
