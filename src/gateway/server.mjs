@@ -11,9 +11,9 @@ import {
   safeParseJson,
 } from "./protocol.mjs";
 
-const METHODS = ["connect", "send", "agent", "copilot", "health"];
+const METHODS = ["connect", "send", "agent", "copilot", "cron.list", "cron.add", "cron.update", "cron.remove", "cron.run", "health"];
 
-export function createGatewayServer(config) {
+export function createGatewayServer(config, { cronScheduler } = {}) {
   const sessions = new Map();
   const connections = new Map();
 
@@ -194,6 +194,72 @@ export function createGatewayServer(config) {
               makeResponse(frame.id, true, { output }),
             ),
           );
+          return;
+        }
+
+        // ── cron.* methods ──
+        if (frame.method === "cron.list") {
+          if (!cronScheduler) {
+            socket.send(JSON.stringify(badRequest(frame.id, "cron subsystem is disabled")));
+            return;
+          }
+          socket.send(JSON.stringify(makeResponse(frame.id, true, { jobs: cronScheduler.list() })));
+          return;
+        }
+
+        if (frame.method === "cron.add") {
+          if (!cronScheduler) {
+            socket.send(JSON.stringify(badRequest(frame.id, "cron subsystem is disabled")));
+            return;
+          }
+          const job = cronScheduler.add(frame.params ?? {});
+          socket.send(JSON.stringify(makeResponse(frame.id, true, { job })));
+          return;
+        }
+
+        if (frame.method === "cron.update") {
+          if (!cronScheduler) {
+            socket.send(JSON.stringify(badRequest(frame.id, "cron subsystem is disabled")));
+            return;
+          }
+          const id = String(frame.params?.id ?? "").trim();
+          if (!id) {
+            socket.send(JSON.stringify(badRequest(frame.id, "cron.update requires id")));
+            return;
+          }
+          const { id: _ignored, ...patch } = frame.params;
+          const job = cronScheduler.update(id, patch);
+          socket.send(JSON.stringify(makeResponse(frame.id, true, { job })));
+          return;
+        }
+
+        if (frame.method === "cron.remove") {
+          if (!cronScheduler) {
+            socket.send(JSON.stringify(badRequest(frame.id, "cron subsystem is disabled")));
+            return;
+          }
+          const id = String(frame.params?.id ?? "").trim();
+          if (!id) {
+            socket.send(JSON.stringify(badRequest(frame.id, "cron.remove requires id")));
+            return;
+          }
+          const result = cronScheduler.remove(id);
+          socket.send(JSON.stringify(makeResponse(frame.id, true, result)));
+          return;
+        }
+
+        if (frame.method === "cron.run") {
+          if (!cronScheduler) {
+            socket.send(JSON.stringify(badRequest(frame.id, "cron subsystem is disabled")));
+            return;
+          }
+          const id = String(frame.params?.id ?? "").trim();
+          if (!id) {
+            socket.send(JSON.stringify(badRequest(frame.id, "cron.run requires id")));
+            return;
+          }
+          const result = await cronScheduler.run(id);
+          socket.send(JSON.stringify(makeResponse(frame.id, true, result)));
           return;
         }
 

@@ -36,6 +36,12 @@ export const config = {
     allowAllTools: toBool(process.env.COPILOT_ALLOW_ALL_TOOLS, true),
     workDir: process.env.COPILOT_WORK_DIR?.trim() || "",
   },
+  cron: {
+    enabled: toBool(process.env.CRON_ENABLED, true),
+    jobsFile: process.env.CRON_JOBS_FILE?.trim() || "data/cron-jobs.json",
+    jobTimeoutMs: toInt(process.env.CRON_JOB_TIMEOUT_MS, 600000),
+    maxConcurrent: toInt(process.env.CRON_MAX_CONCURRENT, 1),
+  },
   feishu: {
     enabled: toBool(process.env.FEISHU_ENABLED, false),
     appId: process.env.FEISHU_APP_ID?.trim() || "",

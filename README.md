@@ -6,12 +6,13 @@ This is a minimal Gateway-only MVP inspired by OpenClaw.
 
 - WebSocket gateway at `/ws`
 - First-frame `connect` handshake with token auth
-- Minimal methods: `connect`, `health`, `send`, `agent`, `copilot`
+- Minimal methods: `connect`, `health`, `send`, `agent`, `copilot`, `cron.*`
 - In-memory sessions
 - Generic LLM adapter with one unified entrypoint
 - Supports `responses` and `chat_completions` protocols
 - HTTP health endpoint at `/health`
 - `copilot` method: call `gh copilot` CLI in non-interactive mode
+- `cron.*` methods: 定时任务子系统（持久化 JSON、最近唤醒调度）
 
 ## Quick Start
 
@@ -65,6 +66,10 @@ npm run bridge:feishu
 - `COPILOT_MODEL`: model to use (empty = copilot default)
 - `COPILOT_ALLOW_ALL_TOOLS`: allow copilot to use all tools unattended (`true`/`false`, default `true`)
 - `COPILOT_WORK_DIR`: working directory for copilot (empty = process cwd)
+- `CRON_ENABLED`: enable cron subsystem (`true`/`false`, default `true`)
+- `CRON_JOBS_FILE`: jobs persistence file path (default `data/cron-jobs.json`)
+- `CRON_JOB_TIMEOUT_MS`: per-job execution timeout (default `600000` = 10 min)
+- `CRON_MAX_CONCURRENT`: max concurrent job executions (default `1`)
 
 OpenAI Responses example:
 
@@ -233,3 +238,78 @@ FEISHU_REQUEST_TIMEOUT_MS=130000
 
 - Copilot 模式下 **不需要加锁**
 - Agent 模式下 MVP 不加锁，生产环境建议对 sessionId 加 async mutex
+
+## Cron 定时任务子系统
+
+最小可用的定时任务调度器，支持 6 个核心能力：创建、持久化、定时触发、手动触发、记录结果、重启恢复。
+
+### Schedule 类型
+
+| 类型 | value 含义 | 示例 |
+|------|-----------|------|
+| `at` | ISO 时间字符串或毫秒时间戳（一次性） | `"2026-04-01T08:00:00Z"` |
+| `every` | 间隔毫秒数 | `60000`（每分钟） |
+| `cron` | cron 表达式（由 croner 库解析） | `"0 9 * * 1-5"`（工作日 9 点） |
+
+### Payload Action
+
+| action | 说明 |
+|--------|------|
+| `log` | 打印 `params.message` 到控制台 |
+| `copilot` | 以 `params.prompt` 调用 gh copilot |
+
+### Gateway 方法
+
+**cron.list** — 列出所有任务
+
+```json
+{ "type": "req", "id": "10", "method": "cron.list", "params": {} }
+```
+
+**cron.add** — 创建任务
+
+```json
+{
+  "type": "req", "id": "11", "method": "cron.add",
+  "params": {
+    "name": "每分钟打日志",
+    "schedule": { "type": "every", "value": 60000 },
+    "payload": { "action": "log", "params": { "message": "heartbeat" } }
+  }
+}
+```
+
+**cron.update** — 更新任务（传 id + 要改的字段）
+
+```json
+{
+  "type": "req", "id": "12", "method": "cron.update",
+  "params": { "id": "<job-id>", "enabled": false }
+}
+```
+
+**cron.remove** — 删除任务
+
+```json
+{ "type": "req", "id": "13", "method": "cron.remove", "params": { "id": "<job-id>" } }
+```
+
+**cron.run** — 手动强制执行一次
+
+```json
+{ "type": "req", "id": "14", "method": "cron.run", "params": { "id": "<job-id>" } }
+```
+
+### 持久化
+
+- 任务存储在 `data/cron-jobs.json`（可通过 `CRON_JOBS_FILE` 配置）
+- 每次增删改后立即落盘（写临时文件 + rename 保证原子性）
+- `data/` 目录已加入 `.gitignore`
+
+### MVP 防护
+
+- 任务超时：默认 10 分钟（`CRON_JOB_TIMEOUT_MS`）
+- 并发上限：默认 1（`CRON_MAX_CONCURRENT`）
+- 防重复执行：`runningAtMs` 标记 + 持久化
+- 启动恢复：自动清理上次残留 running 标记，重算 nextRunAtMs
+- 一次性任务（`at`）：过期后自动禁用
