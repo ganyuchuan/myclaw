@@ -89,6 +89,156 @@ function clipText(value, maxChars = 500) {
   return `${text.slice(0, maxChars)}...`;
 }
 
+function splitCommandText(text) {
+  const raw = String(text ?? "").trim();
+  if (!raw.startsWith("/")) {
+    return null;
+  }
+
+  const firstSpace = raw.indexOf(" ");
+  if (firstSpace < 0) {
+    return { cmd: raw.toLowerCase(), rest: "" };
+  }
+
+  return {
+    cmd: raw.slice(0, firstSpace).toLowerCase(),
+    rest: raw.slice(firstSpace + 1).trim(),
+  };
+}
+
+function parseMaybeJsonObject(raw, fieldName) {
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error(`${fieldName} must be a JSON object`);
+    }
+    return parsed;
+  } catch (error) {
+    throw new Error(`${fieldName} must be valid JSON: ${String(error?.message ?? error)}`);
+  }
+}
+
+function withFeishuNotificationTarget(params, { chatId, senderOpenId }) {
+  if (params.notify && typeof params.notify === "object" && !Array.isArray(params.notify)) {
+    return params;
+  }
+
+  return {
+    ...params,
+    notify: {
+      type: "feishu",
+      chatId,
+      senderOpenId,
+    },
+  };
+}
+
+async function routeCommand({ text, sessionId, gatewayClient, copilotCfg, chatId, senderOpenId }) {
+  const command = splitCommandText(text);
+  if (!command) {
+    return null;
+  }
+
+  const { cmd, rest } = command;
+
+  if (cmd === "/help") {
+    return [
+      "支持命令:",
+      "/copilot <prompt>",
+      "/agent <text>",
+      "/cron list",
+      "/cron run <jobId>",
+      "/cron remove <jobId>",
+      "/cron add <json>",
+      "/cron update <jobId> <jsonPatch>",
+    ].join("\n");
+  }
+
+  if (cmd === "/copilot") {
+    if (!copilotCfg.enabled) {
+      throw new Error("copilot tool is disabled");
+    }
+    const prompt = rest;
+    if (!prompt) {
+      throw new Error("usage: /copilot <prompt>");
+    }
+    const payload = await gatewayClient.request("copilot", { prompt });
+    return String(payload?.output ?? "").trim() || "(empty output)";
+  }
+
+  if (cmd === "/agent") {
+    if (!rest) {
+      throw new Error("usage: /agent <text>");
+    }
+    await gatewayClient.request("send", { sessionId, text: rest });
+    const payload = await gatewayClient.request("agent", { sessionId });
+    return String(payload?.reply ?? "").trim() || "(empty output)";
+  }
+
+  if (cmd === "/cron") {
+    if (!rest) {
+      throw new Error("usage: /cron <list|run|remove|add|update> ...");
+    }
+
+    const [actionRaw, ...parts] = rest.split(/\s+/);
+    const action = String(actionRaw ?? "").toLowerCase();
+
+    if (action === "list") {
+      const payload = await gatewayClient.request("cron.list", {});
+      return JSON.stringify(payload?.jobs ?? [], null, 2);
+    }
+
+    if (action === "run") {
+      const id = String(parts[0] ?? "").trim();
+      if (!id) {
+        throw new Error("usage: /cron run <jobId>");
+      }
+      const payload = await gatewayClient.request("cron.run", { id });
+      return JSON.stringify(payload ?? {}, null, 2);
+    }
+
+    if (action === "remove") {
+      const id = String(parts[0] ?? "").trim();
+      if (!id) {
+        throw new Error("usage: /cron remove <jobId>");
+      }
+      const payload = await gatewayClient.request("cron.remove", { id });
+      return JSON.stringify(payload ?? {}, null, 2);
+    }
+
+    if (action === "add") {
+      const jsonText = rest.slice("add".length).trim();
+      if (!jsonText) {
+        throw new Error("usage: /cron add <json>");
+      }
+      const params = withFeishuNotificationTarget(
+        parseMaybeJsonObject(jsonText, "cron.add params"),
+        { chatId, senderOpenId },
+      );
+      const payload = await gatewayClient.request("cron.add", params);
+      return JSON.stringify(payload?.job ?? payload ?? {}, null, 2);
+    }
+
+    if (action === "update") {
+      const id = String(parts[0] ?? "").trim();
+      if (!id) {
+        throw new Error("usage: /cron update <jobId> <jsonPatch>");
+      }
+      const patchText = rest.slice("update".length).trim().slice(id.length).trim();
+      if (!patchText) {
+        throw new Error("usage: /cron update <jobId> <jsonPatch>");
+      }
+      const patch = parseMaybeJsonObject(patchText, "cron.update patch");
+      const payload = await gatewayClient.request("cron.update", { id, ...patch });
+      return JSON.stringify(payload?.job ?? payload ?? {}, null, 2);
+    }
+
+    throw new Error("usage: /cron <list|run|remove|add|update> ...");
+  }
+
+  return null;
+}
+
 async function resolveBotOpenId(feishuClient) {
   try {
     const response = await feishuClient.request({
@@ -239,7 +389,19 @@ dispatcher.register({
     try {
       let reply;
 
-      if (isCopilot) {
+      const commandReply = await routeCommand({
+        text,
+        sessionId,
+        gatewayClient,
+        copilotCfg,
+        chatId,
+        senderOpenId,
+      });
+      if (commandReply !== null) {
+        reply = String(commandReply).trim();
+      }
+
+      if (!reply && isCopilot) {
         const prompt = text.trim();
         if (!prompt) {
           return;
@@ -247,7 +409,7 @@ dispatcher.register({
         console.log(`[feishu-bridge] copilot request from user=${senderOpenId} prompt=${clipText(prompt, 120)}`);
         const copilotPayload = await gatewayClient.request("copilot", { prompt });
         reply = String(copilotPayload?.output ?? "").trim();
-      } else {
+      } else if (!reply) {
         await gatewayClient.request("send", { sessionId, text });
         const agentPayload = await gatewayClient.request("agent", { sessionId });
         reply = String(agentPayload?.reply ?? "").trim();

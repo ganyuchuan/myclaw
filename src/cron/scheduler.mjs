@@ -128,6 +128,7 @@ export function createCronScheduler(config) {
 
   // Custom executors registered externally
   const executors = {};
+  const completionListeners = new Set();
 
   // ── helpers ──
 
@@ -199,10 +200,21 @@ export function createCronScheduler(config) {
     scheduleWake();
   };
 
-  const runJob = async (job) => {
+  const notifyCompletionListeners = async (event) => {
+    for (const listener of completionListeners) {
+      try {
+        await listener(event);
+      } catch (error) {
+        console.error(`[cron] completion listener failed: ${String(error?.message ?? error)}`);
+      }
+    }
+  };
+
+  const runJob = async (job, trigger = "scheduled") => {
     running++;
     job.state.runningAtMs = Date.now();
     persist();
+    let output;
 
     const timeout = new Promise((_, reject) => {
       const t = setTimeout(
@@ -215,7 +227,7 @@ export function createCronScheduler(config) {
     });
 
     try {
-      await Promise.race([executeJob(job, executors), timeout]);
+      output = await Promise.race([executeJob(job, executors), timeout]);
       job.state.lastStatus = "ok";
       job.state.lastError = null;
     } catch (err) {
@@ -238,6 +250,13 @@ export function createCronScheduler(config) {
 
       running--;
       persist();
+      await notifyCompletionListeners({
+        job: { ...job },
+        trigger,
+        status: job.state.lastStatus,
+        error: job.state.lastError,
+        output,
+      });
       scheduleWake();
     }
   };
@@ -358,12 +377,13 @@ export function createCronScheduler(config) {
       throw new Error(`job ${id} is already running`);
     }
 
-    await runJob(job);
+    await runJob(job, "manual");
     return {
       id: job.id,
       lastStatus: job.state.lastStatus,
       lastError: job.state.lastError,
       lastRunAtMs: job.state.lastRunAtMs,
+      output: job.state.lastStatus === "ok" ? undefined : undefined,
     };
   };
 
@@ -386,6 +406,13 @@ export function createCronScheduler(config) {
     executors[action] = fn;
   };
 
+  const onJobFinished = (listener) => {
+    completionListeners.add(listener);
+    return () => {
+      completionListeners.delete(listener);
+    };
+  };
+
   return {
     list,
     add,
@@ -395,5 +422,6 @@ export function createCronScheduler(config) {
     start,
     stop,
     registerExecutor,
+    onJobFinished,
   };
 }
