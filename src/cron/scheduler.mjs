@@ -288,7 +288,7 @@ export function createCronScheduler(config) {
     return [...jobs.values()].map((j) => ({ ...j }));
   };
 
-  const add = ({ name, schedule, payload, enabled }) => {
+  const add = ({ name, schedule, payload, enabled, notify }) => {
     if (!name || typeof name !== "string") {
       throw new Error("job name is required");
     }
@@ -312,6 +312,7 @@ export function createCronScheduler(config) {
       enabled: enabled !== false,
       schedule: { type: schedule.type, value: schedule.value },
       payload: { action: payload.action, params: payload.params ?? {} },
+      ...(notify && typeof notify === "object" && !Array.isArray(notify) ? { notify: { ...notify } } : {}),
       state: { ...makeDefaultState(), nextRunAtMs },
       createdAtMs: now,
       updatedAtMs: now,
@@ -340,6 +341,13 @@ export function createCronScheduler(config) {
     }
     if (patch.payload !== undefined) {
       job.payload = { action: patch.payload.action, params: patch.payload.params ?? {} };
+    }
+    if (patch.notify !== undefined) {
+      if (patch.notify && typeof patch.notify === "object" && !Array.isArray(patch.notify)) {
+        job.notify = { ...patch.notify };
+      } else {
+        delete job.notify;
+      }
     }
     if (patch.enabled !== undefined) {
       job.enabled = Boolean(patch.enabled);
