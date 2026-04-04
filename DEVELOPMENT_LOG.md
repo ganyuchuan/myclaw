@@ -109,7 +109,7 @@
 
 ### 6) cron.run 返回 output 给调用方
 
-关联提交：本次提交
+关联提交：`78fbcf0`
 
 变更目标：手动执行 `cron.run` 后，调用方可直接拿到本次任务输出（尤其是 copilot 输出）。
 
@@ -126,4 +126,60 @@
 
 验证记录：
 - node --check src/cron/scheduler.mjs
+- 结果：通过
+
+---
+
+### 7) 新增 Cron Sync REST 服务与数据同步
+
+关联提交：本次提交
+
+变更目标：
+- 提供一个最小可用 HTTP REST 服务，支持跨终端查询 cron job 与执行输出。
+- 将本地 cron 数据（任务增删改 + 每次执行结果）同步到该服务。
+
+主要改动：
+- 新增同步服务：`src/sync/http-server.mjs`
+  - `GET /health`
+  - `GET /api/jobs`
+  - `GET /api/jobs/:id`
+  - `PUT /api/jobs/:id`
+  - `DELETE /api/jobs/:id`
+  - `GET /api/runs?jobId=<id>&limit=100`
+  - `POST /api/runs`
+- 新增同步客户端：`src/sync/client.mjs`
+  - `upsertJob/removeJob/appendRun/health`
+- 在 scheduler 中新增任务变更监听：`onJobChanged`
+  - add/update -> upsert
+  - remove -> delete
+- 在 `index.mjs` 中接入同步逻辑：
+  - 启动时全量同步一次 jobs
+  - job 变化时同步 job 快照
+  - job 执行完成时同步 run 记录（包含 output）
+- 新增配置：
+  - `SYNC_ENABLED`
+  - `SYNC_SERVER_URL`
+  - `SYNC_TIMEOUT_MS`
+  - `SYNC_NODE_ID`
+  - `SYNC_PORT`
+  - `SYNC_DB_FILE`
+- 新增脚本：`npm run sync-server`
+
+涉及文件：
+- src/sync/http-server.mjs
+- src/sync/client.mjs
+- src/cron/scheduler.mjs
+- src/index.mjs
+- src/config.mjs
+- package.json
+- .env.example
+- README.md
+
+验证记录：
+- node --check src/sync/http-server.mjs
+- node --check src/sync/client.mjs
+- node --check src/index.mjs
+- node --check src/cron/scheduler.mjs
+- node --check src/config.mjs
+- curl -s http://127.0.0.1:18790/health
 - 结果：通过

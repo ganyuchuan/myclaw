@@ -70,6 +70,12 @@ npm run bridge:feishu
 - `CRON_JOBS_FILE`: jobs persistence file path (default `data/cron-jobs.json`)
 - `CRON_JOB_TIMEOUT_MS`: per-job execution timeout (default `600000` = 10 min)
 - `CRON_MAX_CONCURRENT`: max concurrent job executions (default `1`)
+- `SYNC_ENABLED`: enable cron sync client (`true`/`false`, default `false`)
+- `SYNC_SERVER_URL`: sync REST server base URL (default `http://127.0.0.1:18790`)
+- `SYNC_TIMEOUT_MS`: sync request timeout (default `5000`)
+- `SYNC_NODE_ID`: node identity written to synced records (default `myclaw-local`)
+- `SYNC_PORT`: sync server port (default `18790`)
+- `SYNC_DB_FILE`: sync server persistence file (default `data/cron-sync-db.json`)
 
 OpenAI Responses example:
 
@@ -313,3 +319,35 @@ FEISHU_REQUEST_TIMEOUT_MS=130000
 - 防重复执行：`runningAtMs` 标记 + 持久化
 - 启动恢复：自动清理上次残留 running 标记，重算 nextRunAtMs
 - 一次性任务（`at`）：过期后自动禁用
+
+## Cron Sync REST Server
+
+新增一个最小可用 Node.js HTTP 服务，用于汇总本地 cron job 与每次执行输出。其他终端可通过 REST API 拉取这些数据。
+
+启动：
+
+```bash
+npm run sync-server
+```
+
+健康检查：
+
+```bash
+curl http://127.0.0.1:18790/health
+```
+
+主要 API：
+
+- `GET /api/jobs`：获取全部任务快照
+- `GET /api/jobs/:id`：获取单个任务
+- `GET /api/runs?jobId=<id>&limit=100`：获取执行记录
+
+当 `SYNC_ENABLED=true` 时，myclaw gateway 会自动将以下数据同步到该服务：
+
+- cron 任务增删改（upsert/delete）
+- 每次任务执行完成事件（含 `status/error/output`）
+
+说明：
+
+- 同步失败不会影响本地 cron 执行，仅记录 warning 日志
+- 服务端数据落盘为 JSON（写临时文件 + rename）

@@ -8,7 +8,8 @@
   "scripts": {
     "start": "node src/index.mjs",
     "dev": "node --watch src/index.mjs",
-    "bridge:feishu": "node src/bridge/feishu.mjs"
+    "bridge:feishu": "node src/bridge/feishu.mjs",
+    "sync-server": "node src/sync/http-server.mjs"
   },
   "engines": {
     "node": ">=22"

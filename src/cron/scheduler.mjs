@@ -131,6 +131,7 @@ export function createCronScheduler(config) {
   // Custom executors registered externally
   const executors = {};
   const completionListeners = new Set();
+  const jobChangeListeners = new Set();
 
   // ── helpers ──
 
@@ -208,6 +209,16 @@ export function createCronScheduler(config) {
         await listener(event);
       } catch (error) {
         console.error(`[cron] completion listener failed: ${String(error?.message ?? error)}`);
+      }
+    }
+  };
+
+  const notifyJobChangeListeners = async (event) => {
+    for (const listener of jobChangeListeners) {
+      try {
+        await listener(event);
+      } catch (error) {
+        console.error(`[cron] job change listener failed: ${String(error?.message ?? error)}`);
       }
     }
   };
@@ -329,6 +340,7 @@ export function createCronScheduler(config) {
 
     jobs.set(id, job);
     persist();
+    notifyJobChangeListeners({ type: "upsert", job: { ...job } });
     scheduleWake();
     return { ...job };
   };
@@ -371,6 +383,7 @@ export function createCronScheduler(config) {
 
     job.updatedAtMs = Date.now();
     persist();
+    notifyJobChangeListeners({ type: "upsert", job: { ...job } });
     scheduleWake();
     return { ...job };
   };
@@ -379,8 +392,10 @@ export function createCronScheduler(config) {
     if (!jobs.has(id)) {
       throw new Error(`job not found: ${id}`);
     }
+    const removedJob = jobs.get(id);
     jobs.delete(id);
     persist();
+    notifyJobChangeListeners({ type: "remove", job: removedJob ? { ...removedJob } : { id } });
     scheduleWake();
     return { removed: true, id };
   };
@@ -430,6 +445,13 @@ export function createCronScheduler(config) {
     };
   };
 
+  const onJobChanged = (listener) => {
+    jobChangeListeners.add(listener);
+    return () => {
+      jobChangeListeners.delete(listener);
+    };
+  };
+
   return {
     list,
     add,
@@ -440,5 +462,6 @@ export function createCronScheduler(config) {
     stop,
     registerExecutor,
     onJobFinished,
+    onJobChanged,
   };
 }

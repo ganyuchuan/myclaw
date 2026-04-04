@@ -42,6 +42,12 @@ export const config = {
     jobTimeoutMs: toInt(process.env.CRON_JOB_TIMEOUT_MS, 600000),
     maxConcurrent: toInt(process.env.CRON_MAX_CONCURRENT, 1),
   },
+  sync: {
+    enabled: toBool(process.env.SYNC_ENABLED, false),
+    serverUrl: process.env.SYNC_SERVER_URL?.trim() || "http://127.0.0.1:18790",
+    timeoutMs: toInt(process.env.SYNC_TIMEOUT_MS, 5000),
+    nodeId: process.env.SYNC_NODE_ID?.trim() || "myclaw-local",
+  },
   feishu: {
     enabled: toBool(process.env.FEISHU_ENABLED, false),
     appId: process.env.FEISHU_APP_ID?.trim() || "",
