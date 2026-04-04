@@ -261,6 +261,13 @@ export function createCronScheduler(config) {
       });
       scheduleWake();
     }
+
+    return {
+      output,
+      lastStatus: job.state.lastStatus,
+      lastError: job.state.lastError,
+      lastRunAtMs: job.state.lastRunAtMs,
+    };
   };
 
   // ── Recovery on startup ──
@@ -387,13 +394,13 @@ export function createCronScheduler(config) {
       throw new Error(`job ${id} is already running`);
     }
 
-    await runJob(job, "manual");
+    const result = await runJob(job, "manual");
     return {
       id: job.id,
-      lastStatus: job.state.lastStatus,
-      lastError: job.state.lastError,
-      lastRunAtMs: job.state.lastRunAtMs,
-      output: job.state.lastStatus === "ok" ? undefined : undefined,
+      lastStatus: result.lastStatus,
+      lastError: result.lastError,
+      lastRunAtMs: result.lastRunAtMs,
+      output: result.output,
     };
   };
 

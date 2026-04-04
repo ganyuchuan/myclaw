@@ -104,3 +104,26 @@
 - 旧任务（历史上未带 notify）：
   - 仍会执行
   - 不会自动回飞书，需重建或补充 notify
+
+---
+
+### 6) cron.run 返回 output 给调用方
+
+关联提交：本次提交
+
+变更目标：手动执行 `cron.run` 后，调用方可直接拿到本次任务输出（尤其是 copilot 输出）。
+
+主要改动：
+- `runJob` 在完成后返回执行结果对象：
+  - `output`
+  - `lastStatus`
+  - `lastError`
+  - `lastRunAtMs`
+- `run(id)` 改为接收 `runJob` 返回值并透传给 RPC 调用方。
+
+涉及文件：
+- src/cron/scheduler.mjs
+
+验证记录：
+- node --check src/cron/scheduler.mjs
+- 结果：通过
