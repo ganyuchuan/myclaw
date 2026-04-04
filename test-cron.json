@@ -1,0 +1,13 @@
+{
+  "type": "req", "id": "12", "method": "cron.add",
+  "params": {
+    "name": "日报测试",
+    "schedule": { "type": "every", "value": 60000 },
+    "payload": { "action": "copilot", "params": { "prompt": "请汇报你当日工作内容" } },
+    "notify": {
+        "type": "feishu",
+        "chatId": "oc_52d5d3fe601acd24dcfa5729769d46ed",
+        "senderOpenId": "ou_8148ce58b7e4cab0bc967529f73c93b5"
+    }
+  }
+}

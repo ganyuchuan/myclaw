@@ -1,6 +1,8 @@
 {
-"type":"req",
-"id":"3",
-"method":"agent",
-"params":{"sessionId":"main"}
+    "type": "req",
+    "id": "3",
+    "method": "agent",
+    "params": {
+        "sessionId": "main"
+    }
 }
