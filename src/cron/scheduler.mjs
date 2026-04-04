@@ -19,6 +19,7 @@ import { Cron } from "croner";
  *     lastStatus: "ok"|"error"|null,
  *     lastError: string|null,
  *     runningAtMs: number|null,
+ *     copilotSessionId: string|null,
  *     runCount: number,
  *   },
  *   createdAtMs: number,
@@ -33,6 +34,7 @@ function makeDefaultState() {
     lastStatus: null,
     lastError: null,
     runningAtMs: null,
+    copilotSessionId: null,
     runCount: 0,
   };
 }
