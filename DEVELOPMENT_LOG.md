@@ -222,3 +222,40 @@
 - node --check src/bridge/feishu.mjs
 - node --check src/config.mjs
 - 结果：通过
+
+---
+
+### 9) 统一共享 Copilot Session + 飞书 Markdown 回发
+
+关联提交：`5af26f5`
+
+变更目标：
+- 将 copilot 会话复用从“按 job 复用”统一为“进程内共享 session 复用”。
+- 飞书回发支持 Markdown 渲染，避免 copilot 文案在飞书中退化为纯文本。
+
+主要改动：
+- Copilot 会话复用：
+  - 新增 `COPILOT_REUSE_SESSION` 配置（默认开启）。
+  - 会话复用逻辑下沉到工具层，统一使用共享 `sharedCopilotSessionId`。
+  - gateway `copilot` 与 cron `copilot` 执行器都改为走同一共享 session 入口。
+  - 新增调用日志，打印 `gh copilot` 实际参数、耗时、退出状态。
+- 飞书 Markdown 回发：
+  - 新增 `FEISHU_REPLY_MARKDOWN` 配置（默认开启）。
+  - 回发时使用 `interactive` + `markdown` 卡片渲染（可配置回退纯文本）。
+
+涉及文件：
+- src/tool/copilot.mjs
+- src/gateway/server.mjs
+- src/index.mjs
+- src/config.mjs
+- src/bridge/feishu.mjs
+- .env.example
+- README.md
+
+验证记录：
+- node --check src/tool/copilot.mjs
+- node --check src/gateway/server.mjs
+- node --check src/index.mjs
+- node --check src/bridge/feishu.mjs
+- node --check src/config.mjs
+- 结果：通过
