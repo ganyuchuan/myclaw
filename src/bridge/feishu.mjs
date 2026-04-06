@@ -1,4 +1,6 @@
 import * as Lark from "@larksuiteoapi/node-sdk";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { config } from "../config.mjs";
 import { createGatewayClient } from "./gateway-client.mjs";
 
@@ -22,21 +24,131 @@ function normalizeDomain(domain) {
   return domain;
 }
 
-function parseTextContent(messageType, rawContent) {
+function parseInboundContent(messageType, rawContent) {
   if (!rawContent) {
-    return "";
-  }
-
-  if (messageType !== "text") {
-    return "";
+    return { text: "", kind: "unknown", imageKey: "" };
   }
 
   try {
     const parsed = JSON.parse(rawContent);
-    return String(parsed?.text ?? "").trim();
+
+    if (messageType === "text") {
+      return {
+        text: String(parsed?.text ?? "").trim(),
+        kind: "text",
+        imageKey: "",
+      };
+    }
+
+    if (messageType === "image") {
+      const imageKey = String(parsed?.image_key ?? "").trim();
+      return {
+        text: "",
+        kind: "image",
+        imageKey,
+      };
+    }
+
+    return { text: "", kind: messageType || "unknown", imageKey: "" };
   } catch {
-    return "";
+    return { text: "", kind: "invalid_json", imageKey: "" };
   }
+}
+
+function getOpenApiBaseUrl(domain) {
+  const normalized = String(domain ?? "").trim().toLowerCase();
+  return normalized === "lark" ? "https://open.larksuite.com" : "https://open.feishu.cn";
+}
+
+function imageExtensionFromMime(contentType) {
+  const mime = String(contentType ?? "").toLowerCase();
+  if (mime.includes("png")) {
+    return "png";
+  }
+  if (mime.includes("gif")) {
+    return "gif";
+  }
+  if (mime.includes("webp")) {
+    return "webp";
+  }
+  return "jpg";
+}
+
+const feishuTokenCache = {
+  token: "",
+  expireAtMs: 0,
+};
+
+async function fetchTenantAccessToken(feishuCfg, forceRefresh = false) {
+  if (!forceRefresh && feishuTokenCache.token && Date.now() < feishuTokenCache.expireAtMs) {
+    return feishuTokenCache.token;
+  }
+
+  const baseUrl = getOpenApiBaseUrl(feishuCfg.domain);
+  const response = await fetch(`${baseUrl}/open-apis/auth/v3/tenant_access_token/internal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ app_id: feishuCfg.appId, app_secret: feishuCfg.appSecret }),
+  });
+
+  const payload = await response.json().catch(() => null);
+  if (!response.ok || payload?.code !== 0 || !payload?.tenant_access_token) {
+    throw new Error(`failed to get tenant token: ${response.status} ${String(payload?.msg ?? "")}`);
+  }
+
+  const expiresInSec = Number(payload?.expire ?? 7200);
+  feishuTokenCache.token = String(payload.tenant_access_token);
+  feishuTokenCache.expireAtMs = Date.now() + Math.max(60, expiresInSec - 60) * 1000;
+  return feishuTokenCache.token;
+}
+
+async function fetchImageBytes(feishuCfg, messageId, imageKey, token) {
+  const baseUrl = getOpenApiBaseUrl(feishuCfg.domain);
+  const url = `${baseUrl}/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/resources/${encodeURIComponent(imageKey)}?type=image`;
+  return fetch(url, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+}
+
+async function downloadFeishuImageToTemp({ feishuCfg, messageId, imageKey }) {
+  if (!imageKey) {
+    throw new Error("image_key is missing in feishu image message");
+  }
+
+  const tempDir = feishuCfg.imageTempDir || "data/feishu-images";
+  await fs.mkdir(tempDir, { recursive: true });
+
+  let token = await fetchTenantAccessToken(feishuCfg);
+  let response = await fetchImageBytes(feishuCfg, messageId, imageKey, token);
+  if (response.status === 401) {
+    token = await fetchTenantAccessToken(feishuCfg, true);
+    response = await fetchImageBytes(feishuCfg, messageId, imageKey, token);
+  }
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`download feishu image failed: ${response.status} ${text.slice(0, 200)}`);
+  }
+
+  const contentType = String(response.headers.get("content-type") || "image/jpeg");
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (bytes.length > feishuCfg.imageMaxBytes) {
+    throw new Error(`image too large: ${bytes.length} > ${feishuCfg.imageMaxBytes}`);
+  }
+
+  const ext = imageExtensionFromMime(contentType);
+  const fileName = `${Date.now()}-${messageId.slice(-8)}-${imageKey.slice(0, 8)}.${ext}`;
+  const filePath = path.resolve(tempDir, fileName);
+  await fs.writeFile(filePath, bytes);
+
+  return {
+    filePath,
+    contentType,
+    size: bytes.length,
+  };
 }
 
 function stripMentions(text, mentions) {
@@ -348,9 +460,9 @@ dispatcher.register({
       return;
     }
 
-    const rawText = parseTextContent(messageType, message?.content);
-    const text = stripMentions(rawText, mentions);
-    if (!text) {
+    const inbound = parseInboundContent(messageType, message?.content);
+    const text = stripMentions(inbound.text, mentions);
+    if (!text && inbound.kind !== "image") {
       return;
     }
 
@@ -386,6 +498,7 @@ dispatcher.register({
       console.warn(`[feishu-bridge] add reaction failed: ${e?.message ?? e}`);
     }
 
+    let downloadedImage = null;
     try {
       let reply;
 
@@ -402,17 +515,38 @@ dispatcher.register({
       }
 
       if (!reply && isCopilot) {
-        const prompt = text.trim();
+        let prompt = text.trim();
+        if (inbound.kind === "image") {
+          downloadedImage = await downloadFeishuImageToTemp({
+            feishuCfg,
+            messageId,
+            imageKey: inbound.imageKey,
+          });
+          prompt = [
+            "用户发送了一张飞书图片，请分析图片内容并用中文回答。",
+            `图片文件路径: ${downloadedImage.filePath}`,
+            `图片类型: ${downloadedImage.contentType}`,
+            `图片大小(bytes): ${downloadedImage.size}`,
+            "如果无法直接读取图片内容，请明确说明原因并给出可执行的下一步。",
+          ].join("\n");
+        }
+
         if (!prompt) {
           return;
         }
-        console.log(`[feishu-bridge] copilot request from user=${senderOpenId} prompt=${clipText(prompt, 120)}`);
+        console.log(
+          `[feishu-bridge] copilot request from user=${senderOpenId} kind=${inbound.kind} prompt=${clipText(prompt, 120)}`,
+        );
         const copilotPayload = await gatewayClient.request("copilot", { prompt });
         reply = String(copilotPayload?.output ?? "").trim();
       } else if (!reply) {
-        await gatewayClient.request("send", { sessionId, text });
-        const agentPayload = await gatewayClient.request("agent", { sessionId });
-        reply = String(agentPayload?.reply ?? "").trim();
+        if (inbound.kind === "image") {
+          reply = "当前仅 copilot 模式支持图片处理，请启用 COPILOT_ENABLED=true 后重试。";
+        } else {
+          await gatewayClient.request("send", { sessionId, text });
+          const agentPayload = await gatewayClient.request("agent", { sessionId });
+          reply = String(agentPayload?.reply ?? "").trim();
+        }
       }
 
       if (!reply) {
@@ -442,6 +576,10 @@ dispatcher.register({
         });
       } catch (replyError) {
         console.error(`[feishu-bridge] error reply failed: ${String(replyError?.message ?? replyError)}`);
+      }
+    } finally {
+      if (downloadedImage?.filePath) {
+        await fs.unlink(downloadedImage.filePath).catch(() => {});
       }
     }
   },

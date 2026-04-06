@@ -60,6 +60,8 @@ export const config = {
     gatewayToken: process.env.FEISHU_GATEWAY_TOKEN?.trim() || process.env.GATEWAY_TOKEN?.trim() || "dev-token",
     clientId: process.env.FEISHU_CLIENT_ID?.trim() || "myclaw-feishu-bridge",
     requestTimeoutMs: toInt(process.env.FEISHU_REQUEST_TIMEOUT_MS, 15000),
+    imageTempDir: process.env.FEISHU_IMAGE_TEMP_DIR?.trim() || "data/feishu-images",
+    imageMaxBytes: toInt(process.env.FEISHU_IMAGE_MAX_BYTES, 10 * 1024 * 1024),
   },
   maxPayloadBytes: 1024 * 1024,
 };

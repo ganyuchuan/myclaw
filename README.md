@@ -40,6 +40,72 @@ npm start
 npm run bridge:feishu
 ```
 
+## Source Archive 安装与启动（无 Docker）
+
+适用于通过 Git Tag + Source Archive 发布的源码产物。
+
+### 1) 下载源码包
+
+从 GitHub Release 下载以下任一文件并解压：
+
+- `myclaw-v0.1.0-source.tar.gz`
+- `myclaw-v0.1.0-source.zip`
+
+### 2) 环境要求
+
+- Node.js `>=22`
+- npm `>=10`
+- （如需 copilot）已安装并登录 `gh` CLI
+
+### 3) 安装依赖
+
+```bash
+npm install
+```
+
+### 4) 配置环境变量
+
+```bash
+cp .env.example .env
+```
+
+按需编辑 `.env` 中以下关键项：
+
+- 网关：`PORT`、`GATEWAY_TOKEN`
+- LLM：`LLM_PROVIDER`、`LLM_PROTOCOL`、`LLM_ENDPOINT`、`LLM_MODEL`、`LLM_API_KEY`
+- 飞书桥接：`FEISHU_*`
+- Cron：`CRON_*`
+- 同步：`SYNC_ENABLED`、`SYNC_SERVER_URL`
+
+### 5) 启动服务
+
+启动核心网关：
+
+```bash
+npm start
+```
+
+可选：启动飞书桥接：
+
+```bash
+npm run bridge:feishu
+```
+
+可选：启动同步服务：
+
+```bash
+npm run sync-server
+```
+
+### 6) 启动后检查
+
+```bash
+curl http://127.0.0.1:18789/health
+curl http://127.0.0.1:18790/health
+```
+
+说明：若只启动网关，第二条命令会失败，这是预期行为。
+
 ## Environment Variables
 
 - `PORT`: gateway port (default `18789`)
@@ -61,6 +127,8 @@ npm run bridge:feishu
 - `FEISHU_GATEWAY_TOKEN`: gateway token used by feishu bridge
 - `FEISHU_CLIENT_ID`: feishu bridge client id used in gateway connect
 - `FEISHU_REQUEST_TIMEOUT_MS`: gateway request timeout for feishu bridge
+- `FEISHU_IMAGE_TEMP_DIR`: local temp directory for downloaded Feishu images (default `data/feishu-images`)
+- `FEISHU_IMAGE_MAX_BYTES`: max accepted image size in bytes (default `10485760`)
 - `COPILOT_ENABLED`: enable gh copilot tool (`true`/`false`, default `true`)
 - `COPILOT_TIMEOUT_MS`: timeout for gh copilot execution (default `120000`)
 - `COPILOT_MODEL`: model to use (empty = copilot default)
@@ -143,7 +211,8 @@ MVP scope:
 
 - Single account only (`FEISHU_APP_ID` + `FEISHU_APP_SECRET`).
 - Inbound event: `im.message.receive_v1` via Feishu WebSocket connection.
-- Text message only (`message_type=text`).
+- Supports `message_type=text` and `message_type=image`.
+- For image messages in copilot mode, bridge downloads image to local temp file and passes file path to copilot prompt.
 - Group policy: only trigger when bot is mentioned if `FEISHU_REQUIRE_MENTION_IN_GROUP=true`.
 - Session mapping:
   - DM: `feishu:dm:<senderOpenId>`
