@@ -259,3 +259,38 @@
 - node --check src/bridge/feishu.mjs
 - node --check src/config.mjs
 - 结果：通过
+
+---
+
+### 10) Feishu 文件消息处理（md/txt）接入 Copilot
+
+关联提交：`5d23282`
+
+变更目标：
+- 支持飞书 `message_type=file`，可下载文件并将 markdown/text 内容传给 copilot 处理。
+
+主要改动：
+- Feishu bridge 新增文件消息链路：
+  - 识别 `message_type=file` 并解析 `file_key`、`file_name`
+  - 通过飞书资源接口下载文件到本地临时目录
+  - 对 `md/markdown/txt/text/*` 文件读取文本并按阈值截断后传给 copilot
+  - 非文本文件则传递文件路径与元信息，提示模型给出可执行建议
+  - 在 `finally` 中统一清理下载的临时文件
+- 配置新增：
+  - `FEISHU_FILE_TEMP_DIR`
+  - `FEISHU_FILE_MAX_BYTES`
+  - `FEISHU_FILE_MAX_TEXT_CHARS`
+- 文档同步：
+  - `.env.example` 增加文件处理相关参数
+  - `README.md` 补充 `file` 消息支持与配置说明
+
+涉及文件：
+- src/bridge/feishu.mjs
+- src/config.mjs
+- .env.example
+- README.md
+
+验证记录：
+- node --check src/bridge/feishu.mjs
+- node --check src/config.mjs
+- 结果：通过
