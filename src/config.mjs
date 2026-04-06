@@ -35,6 +35,7 @@ export const config = {
     model: process.env.COPILOT_MODEL?.trim() || "",
     allowAllTools: toBool(process.env.COPILOT_ALLOW_ALL_TOOLS, true),
     workDir: process.env.COPILOT_WORK_DIR?.trim() || "",
+    reuseSession: toBool(process.env.COPILOT_REUSE_SESSION, true),
   },
   cron: {
     enabled: toBool(process.env.CRON_ENABLED, true),
@@ -56,6 +57,7 @@ export const config = {
     connectionMode: process.env.FEISHU_CONNECTION_MODE?.trim().toLowerCase() || "websocket",
     requireMentionInGroup: toBool(process.env.FEISHU_REQUIRE_MENTION_IN_GROUP, true),
     logReply: toBool(process.env.FEISHU_LOG_REPLY, false),
+    replyMarkdown: toBool(process.env.FEISHU_REPLY_MARKDOWN, true),
     gatewayUrl: process.env.FEISHU_GATEWAY_URL?.trim() || "ws://127.0.0.1:18789/ws",
     gatewayToken: process.env.FEISHU_GATEWAY_TOKEN?.trim() || process.env.GATEWAY_TOKEN?.trim() || "dev-token",
     clientId: process.env.FEISHU_CLIENT_ID?.trim() || "myclaw-feishu-bridge",

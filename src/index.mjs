@@ -2,7 +2,7 @@ import { config } from "./config.mjs";
 import { createGatewayServer } from "./gateway/server.mjs";
 import { createCronScheduler } from "./cron/scheduler.mjs";
 import * as Lark from "@larksuiteoapi/node-sdk";
-import { runCopilotWithSession } from "./tool/copilot.mjs";
+import { runCopilotWithSharedSession } from "./tool/copilot.mjs";
 import { createSyncClient } from "./sync/client.mjs";
 
 function normalizeFeishuDomain(domain) {
@@ -56,19 +56,17 @@ if (config.cron.enabled) {
   });
 
     cronScheduler.registerExecutor("copilot", async (params, job) => {
-      const resumeSessionId = String(job?.state?.copilotSessionId ?? "").trim();
-      const { output, sessionId } = await runCopilotWithSession({
+      const { output, sessionId } = await runCopilotWithSharedSession({
         prompt: params.prompt,
         config: config.copilot,
-        resumeSessionId,
       });
 
-      if (sessionId && job?.state) {
-        job.state.copilotSessionId = sessionId;
+      if (job?.state?.copilotSessionId) {
+        delete job.state.copilotSessionId;
       }
 
       console.log(
-        `[cron:copilot] jobId=${job?.id} sessionId=${sessionId || resumeSessionId || "new"} output=${output.slice(0, 500)}`,
+        `[cron:copilot] jobId=${job?.id} sharedSessionId=${sessionId || "new"} output=${output.slice(0, 500)}`,
       );
       return output;
   });

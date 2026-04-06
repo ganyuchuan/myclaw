@@ -1,5 +1,7 @@
 import { execFile } from "node:child_process";
 
+let sharedCopilotSessionId = "";
+
 function buildCopilotArgs({ prompt, config, resumeSessionId, outputJson }) {
   const args = ["copilot", "-p", prompt, "-s", "--no-ask-user"];
 
@@ -24,6 +26,11 @@ function buildCopilotArgs({ prompt, config, resumeSessionId, outputJson }) {
 
 function runGhCopilot({ args, config }) {
   const cwd = config.workDir || process.cwd();
+  const startedAt = Date.now();
+
+  console.log(
+    `[copilot] exec gh ${JSON.stringify(args)} cwd=${cwd} timeoutMs=${config.timeoutMs} maxBuffer=8388608`,
+  );
 
   return new Promise((resolve, reject) => {
     execFile(
@@ -36,11 +43,16 @@ function runGhCopilot({ args, config }) {
         env: { ...process.env },
       },
       (error, stdout, stderr) => {
+        const elapsedMs = Date.now() - startedAt;
         if (error) {
           const msg = stderr?.trim() || error.message;
+          console.error(
+            `[copilot] gh finished error elapsedMs=${elapsedMs} code=${error.code ?? "unknown"} signal=${error.signal ?? ""} message=${msg}`,
+          );
           reject(new Error(`gh copilot failed: ${msg}`));
           return;
         }
+        console.log(`[copilot] gh finished ok elapsedMs=${elapsedMs} stdoutChars=${stdout.trim().length}`);
         resolve(stdout.trim());
       },
     );
@@ -130,4 +142,46 @@ export async function runCopilotWithSession({ prompt, config, resumeSessionId = 
 
   const raw = await runGhCopilot({ args, config });
   return parseCopilotJsonOutput(raw);
+}
+
+export function getSharedCopilotSessionId() {
+  return sharedCopilotSessionId;
+}
+
+export function setSharedCopilotSessionId(sessionId) {
+  const normalized = String(sessionId ?? "").trim();
+  if (normalized) {
+    sharedCopilotSessionId = normalized;
+  }
+}
+
+export function resetSharedCopilotSessionId() {
+  sharedCopilotSessionId = "";
+}
+
+/**
+ * Run copilot with one shared reusable session across the current process.
+ *
+ * @param {object} options
+ * @param {string} options.prompt
+ * @param {object} options.config
+ * @returns {Promise<{ output: string, sessionId: string }>}
+ */
+export async function runCopilotWithSharedSession({ prompt, config }) {
+  if (!config?.reuseSession) {
+    const output = await runCopilot({ prompt, config });
+    return { output, sessionId: "" };
+  }
+
+  const { output, sessionId } = await runCopilotWithSession({
+    prompt,
+    config,
+    resumeSessionId: sharedCopilotSessionId,
+  });
+
+  if (sessionId) {
+    sharedCopilotSessionId = sessionId;
+  }
+
+  return { output, sessionId: sharedCopilotSessionId };
 }

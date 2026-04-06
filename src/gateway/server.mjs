@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import crypto from "node:crypto";
 import { WebSocketServer } from "ws";
 import { generateAssistantReply } from "../model/client.mjs";
-import { runCopilot } from "../tool/copilot.mjs";
+import { runCopilotWithSharedSession } from "../tool/copilot.mjs";
 import {
   isRequestFrame,
   makeError,
@@ -187,11 +187,14 @@ export function createGatewayServer(config, { cronScheduler } = {}) {
             return;
           }
 
-          const output = await runCopilot({ prompt, config: config.copilot });
+          const { output, sessionId } = await runCopilotWithSharedSession({
+            prompt,
+            config: config.copilot,
+          });
 
           socket.send(
             JSON.stringify(
-              makeResponse(frame.id, true, { output }),
+              makeResponse(frame.id, true, { output, sessionId: sessionId || undefined }),
             ),
           );
           return;

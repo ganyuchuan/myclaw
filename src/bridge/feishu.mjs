@@ -364,12 +364,34 @@ async function resolveBotOpenId(feishuClient) {
   }
 }
 
-async function sendFeishuText({ feishuClient, chatId, replyToMessageId, text }) {
-  const content = JSON.stringify({ text });
+function buildFeishuContent(text, renderAsMarkdown) {
+  if (!renderAsMarkdown) {
+    return {
+      msgType: "text",
+      content: JSON.stringify({ text }),
+    };
+  }
+
+  return {
+    msgType: "interactive",
+    content: JSON.stringify({
+      config: { wide_screen_mode: true },
+      elements: [
+        {
+          tag: "markdown",
+          content: String(text ?? ""),
+        },
+      ],
+    }),
+  };
+}
+
+async function sendFeishuText({ feishuClient, chatId, replyToMessageId, text, renderAsMarkdown = false }) {
+  const payload = buildFeishuContent(text, renderAsMarkdown);
   if (replyToMessageId) {
     await feishuClient.im.message.reply({
       path: { message_id: replyToMessageId },
-      data: { msg_type: "text", content },
+      data: { msg_type: payload.msgType, content: payload.content },
     });
     return;
   }
@@ -378,8 +400,8 @@ async function sendFeishuText({ feishuClient, chatId, replyToMessageId, text }) 
     params: { receive_id_type: "chat_id" },
     data: {
       receive_id: chatId,
-      msg_type: "text",
-      content,
+      msg_type: payload.msgType,
+      content: payload.content,
     },
   });
 }
@@ -564,6 +586,7 @@ dispatcher.register({
         chatId,
         replyToMessageId: messageId,
         text: reply,
+        renderAsMarkdown: feishuCfg.replyMarkdown,
       });
     } catch (error) {
       console.error(`[feishu-bridge] handle message failed: ${String(error?.message ?? error)}`);
@@ -573,6 +596,7 @@ dispatcher.register({
           chatId,
           replyToMessageId: messageId,
           text: `[错误] ${String(error?.message ?? error).slice(0, 500)}`,
+          renderAsMarkdown: feishuCfg.replyMarkdown,
         });
       } catch (replyError) {
         console.error(`[feishu-bridge] error reply failed: ${String(replyError?.message ?? replyError)}`);

@@ -123,6 +123,7 @@ curl http://127.0.0.1:18790/health
 - `FEISHU_CONNECTION_MODE`: only `websocket` is supported in MVP
 - `FEISHU_REQUIRE_MENTION_IN_GROUP`: in group chat, require bot mention to trigger
 - `FEISHU_LOG_REPLY`: log outbound reply text in bridge logs (`true`/`false`, default `false`)
+- `FEISHU_REPLY_MARKDOWN`: send Feishu replies as markdown-rendered interactive card (`true`/`false`, default `true`)
 - `FEISHU_GATEWAY_URL`: myclaw gateway websocket url
 - `FEISHU_GATEWAY_TOKEN`: gateway token used by feishu bridge
 - `FEISHU_CLIENT_ID`: feishu bridge client id used in gateway connect
@@ -134,6 +135,7 @@ curl http://127.0.0.1:18790/health
 - `COPILOT_MODEL`: model to use (empty = copilot default)
 - `COPILOT_ALLOW_ALL_TOOLS`: allow copilot to use all tools unattended (`true`/`false`, default `true`)
 - `COPILOT_WORK_DIR`: working directory for copilot (empty = process cwd)
+- `COPILOT_REUSE_SESSION`: reuse one shared copilot session in gateway `copilot` method (`true`/`false`, default `true`)
 - `CRON_ENABLED`: enable cron subsystem (`true`/`false`, default `true`)
 - `CRON_JOBS_FILE`: jobs persistence file path (default `data/cron-jobs.json`)
 - `CRON_JOB_TIMEOUT_MS`: per-job execution timeout (default `600000` = 10 min)
