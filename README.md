@@ -130,6 +130,9 @@ curl http://127.0.0.1:18790/health
 - `FEISHU_REQUEST_TIMEOUT_MS`: gateway request timeout for feishu bridge
 - `FEISHU_IMAGE_TEMP_DIR`: local temp directory for downloaded Feishu images (default `data/feishu-images`)
 - `FEISHU_IMAGE_MAX_BYTES`: max accepted image size in bytes (default `10485760`)
+- `FEISHU_FILE_TEMP_DIR`: local temp directory for downloaded Feishu files (default `data/feishu-files`)
+- `FEISHU_FILE_MAX_BYTES`: max accepted file size in bytes (default `20971520`)
+- `FEISHU_FILE_MAX_TEXT_CHARS`: max chars kept when reading md/txt file content (default `20000`)
 - `COPILOT_ENABLED`: enable gh copilot tool (`true`/`false`, default `true`)
 - `COPILOT_TIMEOUT_MS`: timeout for gh copilot execution (default `120000`)
 - `COPILOT_MODEL`: model to use (empty = copilot default)
@@ -213,8 +216,9 @@ MVP scope:
 
 - Single account only (`FEISHU_APP_ID` + `FEISHU_APP_SECRET`).
 - Inbound event: `im.message.receive_v1` via Feishu WebSocket connection.
-- Supports `message_type=text` and `message_type=image`.
+- Supports `message_type=text`, `message_type=image`, and `message_type=file`.
 - For image messages in copilot mode, bridge downloads image to local temp file and passes file path to copilot prompt.
+- For file messages in copilot mode, bridge downloads the file; for md/txt it reads text content and forwards it to copilot.
 - Group policy: only trigger when bot is mentioned if `FEISHU_REQUIRE_MENTION_IN_GROUP=true`.
 - Session mapping:
   - DM: `feishu:dm:<senderOpenId>`

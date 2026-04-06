@@ -26,7 +26,7 @@ function normalizeDomain(domain) {
 
 function parseInboundContent(messageType, rawContent) {
   if (!rawContent) {
-    return { text: "", kind: "unknown", imageKey: "" };
+    return { text: "", kind: "unknown", imageKey: "", fileKey: "", fileName: "" };
   }
 
   try {
@@ -37,6 +37,8 @@ function parseInboundContent(messageType, rawContent) {
         text: String(parsed?.text ?? "").trim(),
         kind: "text",
         imageKey: "",
+        fileKey: "",
+        fileName: "",
       };
     }
 
@@ -46,12 +48,26 @@ function parseInboundContent(messageType, rawContent) {
         text: "",
         kind: "image",
         imageKey,
+        fileKey: "",
+        fileName: "",
       };
     }
 
-    return { text: "", kind: messageType || "unknown", imageKey: "" };
+    if (messageType === "file") {
+      const fileKey = String(parsed?.file_key ?? "").trim();
+      const fileName = String(parsed?.file_name ?? "").trim();
+      return {
+        text: "",
+        kind: "file",
+        imageKey: "",
+        fileKey,
+        fileName,
+      };
+    }
+
+    return { text: "", kind: messageType || "unknown", imageKey: "", fileKey: "", fileName: "" };
   } catch {
-    return { text: "", kind: "invalid_json", imageKey: "" };
+    return { text: "", kind: "invalid_json", imageKey: "", fileKey: "", fileName: "" };
   }
 }
 
@@ -72,6 +88,34 @@ function imageExtensionFromMime(contentType) {
     return "webp";
   }
   return "jpg";
+}
+
+function extensionFromFileName(fileName) {
+  const base = String(fileName ?? "").trim();
+  const idx = base.lastIndexOf(".");
+  if (idx < 0 || idx === base.length - 1) {
+    return "bin";
+  }
+  return base.slice(idx + 1).toLowerCase();
+}
+
+function parseFileNameFromContentDisposition(contentDisposition) {
+  const value = String(contentDisposition ?? "");
+  if (!value) {
+    return "";
+  }
+
+  const utf8Match = value.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch {
+      return utf8Match[1];
+    }
+  }
+
+  const plainMatch = value.match(/filename="?([^";]+)"?/i);
+  return plainMatch?.[1] ? String(plainMatch[1]) : "";
 }
 
 const feishuTokenCache = {
@@ -113,19 +157,37 @@ async function fetchImageBytes(feishuCfg, messageId, imageKey, token) {
   });
 }
 
-async function downloadFeishuImageToTemp({ feishuCfg, messageId, imageKey }) {
-  if (!imageKey) {
-    throw new Error("image_key is missing in feishu image message");
+async function fetchFileBytes(feishuCfg, messageId, fileKey, token) {
+  const baseUrl = getOpenApiBaseUrl(feishuCfg.domain);
+  const url = `${baseUrl}/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/resources/${encodeURIComponent(fileKey)}?type=file`;
+  return fetch(url, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+}
+
+async function downloadFeishuResourceToTemp({ feishuCfg, messageId, resourceKey, resourceType, fileNameHint = "" }) {
+  if (!resourceKey) {
+    throw new Error(`${resourceType}_key is missing in feishu ${resourceType} message`);
   }
 
-  const tempDir = feishuCfg.imageTempDir || "data/feishu-images";
+  const isImage = resourceType === "image";
+  const tempDir = isImage ? feishuCfg.imageTempDir || "data/feishu-images" : feishuCfg.fileTempDir || "data/feishu-files";
+  const maxBytes = isImage ? feishuCfg.imageMaxBytes : feishuCfg.fileMaxBytes;
   await fs.mkdir(tempDir, { recursive: true });
 
   let token = await fetchTenantAccessToken(feishuCfg);
-  let response = await fetchImageBytes(feishuCfg, messageId, imageKey, token);
+  let response = isImage
+    ? await fetchImageBytes(feishuCfg, messageId, resourceKey, token)
+    : await fetchFileBytes(feishuCfg, messageId, resourceKey, token);
+
   if (response.status === 401) {
     token = await fetchTenantAccessToken(feishuCfg, true);
-    response = await fetchImageBytes(feishuCfg, messageId, imageKey, token);
+    response = isImage
+      ? await fetchImageBytes(feishuCfg, messageId, resourceKey, token)
+      : await fetchFileBytes(feishuCfg, messageId, resourceKey, token);
   }
 
   if (!response.ok) {
@@ -134,20 +196,25 @@ async function downloadFeishuImageToTemp({ feishuCfg, messageId, imageKey }) {
   }
 
   const contentType = String(response.headers.get("content-type") || "image/jpeg");
+  const contentDisposition = String(response.headers.get("content-disposition") || "");
+  const serverFileName = parseFileNameFromContentDisposition(contentDisposition);
+  const fileName = serverFileName || fileNameHint || `${resourceType}-${resourceKey}`;
   const bytes = Buffer.from(await response.arrayBuffer());
-  if (bytes.length > feishuCfg.imageMaxBytes) {
-    throw new Error(`image too large: ${bytes.length} > ${feishuCfg.imageMaxBytes}`);
+  if (bytes.length > maxBytes) {
+    throw new Error(`${resourceType} too large: ${bytes.length} > ${maxBytes}`);
   }
 
-  const ext = imageExtensionFromMime(contentType);
-  const fileName = `${Date.now()}-${messageId.slice(-8)}-${imageKey.slice(0, 8)}.${ext}`;
-  const filePath = path.resolve(tempDir, fileName);
+  const ext = isImage ? imageExtensionFromMime(contentType) : extensionFromFileName(fileName);
+  const safeName = `${Date.now()}-${messageId.slice(-8)}-${resourceKey.slice(0, 8)}.${ext}`;
+  const filePath = path.resolve(tempDir, safeName);
   await fs.writeFile(filePath, bytes);
 
   return {
     filePath,
+    fileName,
     contentType,
     size: bytes.length,
+    resourceType,
   };
 }
 
@@ -484,7 +551,7 @@ dispatcher.register({
 
     const inbound = parseInboundContent(messageType, message?.content);
     const text = stripMentions(inbound.text, mentions);
-    if (!text && inbound.kind !== "image") {
+    if (!text && inbound.kind !== "image" && inbound.kind !== "file") {
       return;
     }
 
@@ -520,7 +587,7 @@ dispatcher.register({
       console.warn(`[feishu-bridge] add reaction failed: ${e?.message ?? e}`);
     }
 
-    let downloadedImage = null;
+    let downloadedResource = null;
     try {
       let reply;
 
@@ -539,18 +606,60 @@ dispatcher.register({
       if (!reply && isCopilot) {
         let prompt = text.trim();
         if (inbound.kind === "image") {
-          downloadedImage = await downloadFeishuImageToTemp({
+          downloadedResource = await downloadFeishuResourceToTemp({
             feishuCfg,
             messageId,
-            imageKey: inbound.imageKey,
+            resourceKey: inbound.imageKey,
+            resourceType: "image",
           });
           prompt = [
             "用户发送了一张飞书图片，请分析图片内容并用中文回答。",
-            `图片文件路径: ${downloadedImage.filePath}`,
-            `图片类型: ${downloadedImage.contentType}`,
-            `图片大小(bytes): ${downloadedImage.size}`,
+            `图片文件路径: ${downloadedResource.filePath}`,
+            `图片类型: ${downloadedResource.contentType}`,
+            `图片大小(bytes): ${downloadedResource.size}`,
             "如果无法直接读取图片内容，请明确说明原因并给出可执行的下一步。",
           ].join("\n");
+        } else if (inbound.kind === "file") {
+          downloadedResource = await downloadFeishuResourceToTemp({
+            feishuCfg,
+            messageId,
+            resourceKey: inbound.fileKey,
+            resourceType: "file",
+            fileNameHint: inbound.fileName,
+          });
+
+          const fileName = String(downloadedResource.fileName || "").toLowerCase();
+          const isTextLike =
+            fileName.endsWith(".md") ||
+            fileName.endsWith(".markdown") ||
+            fileName.endsWith(".txt") ||
+            downloadedResource.contentType.startsWith("text/");
+
+          if (isTextLike) {
+            const raw = await fs.readFile(downloadedResource.filePath, "utf8");
+            const clipped = raw.length > feishuCfg.fileMaxTextChars
+              ? `${raw.slice(0, feishuCfg.fileMaxTextChars)}\n\n[内容已截断，总长度=${raw.length}]`
+              : raw;
+            prompt = [
+              "用户发送了一个文件，请根据文件内容回答。",
+              `文件名: ${downloadedResource.fileName}`,
+              `文件路径: ${downloadedResource.filePath}`,
+              `文件类型: ${downloadedResource.contentType}`,
+              "以下是文件文本内容：",
+              "```",
+              clipped,
+              "```",
+            ].join("\n");
+          } else {
+            prompt = [
+              "用户发送了一个文件，请尝试读取文件并给出结论。",
+              `文件名: ${downloadedResource.fileName}`,
+              `文件路径: ${downloadedResource.filePath}`,
+              `文件类型: ${downloadedResource.contentType}`,
+              `文件大小(bytes): ${downloadedResource.size}`,
+              "如果无法直接解析该格式，请明确说明并建议用户转换为 md/txt。",
+            ].join("\n");
+          }
         }
 
         if (!prompt) {
@@ -562,8 +671,8 @@ dispatcher.register({
         const copilotPayload = await gatewayClient.request("copilot", { prompt });
         reply = String(copilotPayload?.output ?? "").trim();
       } else if (!reply) {
-        if (inbound.kind === "image") {
-          reply = "当前仅 copilot 模式支持图片处理，请启用 COPILOT_ENABLED=true 后重试。";
+        if (inbound.kind === "image" || inbound.kind === "file") {
+          reply = "当前仅 copilot 模式支持图片/文件处理，请启用 COPILOT_ENABLED=true 后重试。";
         } else {
           await gatewayClient.request("send", { sessionId, text });
           const agentPayload = await gatewayClient.request("agent", { sessionId });
@@ -602,8 +711,8 @@ dispatcher.register({
         console.error(`[feishu-bridge] error reply failed: ${String(replyError?.message ?? replyError)}`);
       }
     } finally {
-      if (downloadedImage?.filePath) {
-        await fs.unlink(downloadedImage.filePath).catch(() => {});
+      if (downloadedResource?.filePath) {
+        await fs.unlink(downloadedResource.filePath).catch(() => {});
       }
     }
   },

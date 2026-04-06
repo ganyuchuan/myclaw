@@ -64,6 +64,9 @@ export const config = {
     requestTimeoutMs: toInt(process.env.FEISHU_REQUEST_TIMEOUT_MS, 15000),
     imageTempDir: process.env.FEISHU_IMAGE_TEMP_DIR?.trim() || "data/feishu-images",
     imageMaxBytes: toInt(process.env.FEISHU_IMAGE_MAX_BYTES, 10 * 1024 * 1024),
+    fileTempDir: process.env.FEISHU_FILE_TEMP_DIR?.trim() || "data/feishu-files",
+    fileMaxBytes: toInt(process.env.FEISHU_FILE_MAX_BYTES, 20 * 1024 * 1024),
+    fileMaxTextChars: toInt(process.env.FEISHU_FILE_MAX_TEXT_CHARS, 20000),
   },
   maxPayloadBytes: 1024 * 1024,
 };
