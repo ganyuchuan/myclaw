@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 function toInt(value, fallback) {
@@ -9,6 +10,28 @@ function toInt(value, fallback) {
 
 const port = toInt(process.env.SYNC_PORT, 18790);
 const dbFile = process.env.SYNC_DB_FILE?.trim() || "data/cron-sync-db.json";
+
+function getLanIPv4Addresses() {
+  const interfaces = os.networkInterfaces();
+  const ips = new Set();
+
+  for (const records of Object.values(interfaces)) {
+    for (const item of records ?? []) {
+      if (!item) {
+        continue;
+      }
+      const family = String(item.family);
+      if (family !== "IPv4" || item.internal) {
+        continue;
+      }
+      if (item.address) {
+        ips.add(item.address);
+      }
+    }
+  }
+
+  return [...ips];
+}
 
 function ensureStoreShape(raw) {
   if (!raw || typeof raw !== "object") {
@@ -161,7 +184,11 @@ const server = createServer(async (req, res) => {
   }
 });
 
-server.listen(port, "127.0.0.1", () => {
-  console.log(`[sync-server] listening on http://127.0.0.1:${port}`);
+server.listen(port, "0.0.0.0", () => {
+  console.log(`[sync-server] listening on http://0.0.0.0:${port}`);
+  const lanIps = getLanIPv4Addresses();
+  for (const ip of lanIps) {
+    console.log(`[sync-server] LAN access: http://${ip}:${port}`);
+  }
   console.log(`[sync-server] db file: ${dbFile}`);
 });
