@@ -183,3 +183,42 @@
 - node --check src/config.mjs
 - curl -s http://127.0.0.1:18790/health
 - 结果：通过
+
+---
+
+## 2026-04-06
+
+### 8) Feishu 图片消息“真图片处理版”接入 Copilot
+
+关联提交：`497b504`
+
+变更目标：
+- 让飞书图片消息不再仅传 image_key 元数据，而是下载真实图片后交给 copilot 处理。
+
+主要改动：
+- Feishu bridge 新增图片处理链路：
+  - 识别 `message_type=image`
+  - 通过飞书 OpenAPI 获取 tenant_access_token（含缓存）
+  - 按 `message_id + image_key` 下载图片到本地临时目录
+  - 将本地图片路径、类型、大小写入 prompt 调用 gateway `copilot`
+  - 在 `finally` 中清理临时文件
+- 非 copilot 模式下，图片消息返回明确提示，不再错误走 agent 文本链路。
+- 新增配置项：
+  - `FEISHU_IMAGE_TEMP_DIR`
+  - `FEISHU_IMAGE_MAX_BYTES`
+- 文档更新：
+  - `.env.example` 增加图片处理相关参数
+  - `README.md` 补充图片支持说明
+  - 新增 `RELEASE_NOTES_v0.1.0.md`
+
+涉及文件：
+- src/bridge/feishu.mjs
+- src/config.mjs
+- .env.example
+- README.md
+- RELEASE_NOTES_v0.1.0.md
+
+验证记录：
+- node --check src/bridge/feishu.mjs
+- node --check src/config.mjs
+- 结果：通过
