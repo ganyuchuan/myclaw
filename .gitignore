@@ -3,3 +3,4 @@ node_modules/
 .env.backup.*
 .DS_Store
 data/
+dist/
