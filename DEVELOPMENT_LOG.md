@@ -241,7 +241,7 @@
   - 新增调用日志，打印 `gh copilot` 实际参数、耗时、退出状态。
 - 飞书 Markdown 回发：
   - 新增 `FEISHU_REPLY_MARKDOWN` 配置（默认开启）。
-  - 回发时使用 `interactive` + `markdown` 卡片渲染（可配置回退纯文本）。
+  - 回发时自动识别 Copilot 输出；纯文本走 `text`，Markdown 内容走 `interactive` + `markdown` 卡片渲染。
 
 涉及文件：
 - src/tool/copilot.mjs

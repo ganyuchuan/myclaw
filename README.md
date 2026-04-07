@@ -123,7 +123,7 @@ curl http://127.0.0.1:18790/health
 - `FEISHU_CONNECTION_MODE`: only `websocket` is supported in MVP
 - `FEISHU_REQUIRE_MENTION_IN_GROUP`: in group chat, require bot mention to trigger
 - `FEISHU_LOG_REPLY`: log outbound reply text in bridge logs (`true`/`false`, default `false`)
-- `FEISHU_REPLY_MARKDOWN`: send Feishu replies as markdown-rendered interactive card (`true`/`false`, default `true`)
+- `FEISHU_REPLY_MARKDOWN`: when enabled, auto-detect markdown replies and send them as interactive cards; plain text replies still use `text` (`true`/`false`, default `true`)
 - `FEISHU_GATEWAY_URL`: myclaw gateway websocket url
 - `FEISHU_GATEWAY_TOKEN`: gateway token used by feishu bridge
 - `FEISHU_CLIENT_ID`: feishu bridge client id used in gateway connect
