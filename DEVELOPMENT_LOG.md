@@ -294,3 +294,36 @@
 - node --check src/bridge/feishu.mjs
 - node --check src/config.mjs
 - 结果：通过
+
+---
+
+## 2026-04-07
+
+### 11) Feishu 回发格式自动识别（纯文本 / Markdown）
+
+关联提交：`ed52f3a`
+
+变更目标：
+- 避免所有开启 `FEISHU_REPLY_MARKDOWN` 的回复都强制走卡片渲染，让普通文本继续使用 Feishu `text` 消息类型。
+
+主要改动：
+- 新增 `src/bridge/reply-format.mjs`：
+  - 提取飞书回复 payload 构造逻辑。
+  - 基于标题、列表、代码块、链接、行内代码等特征识别 Markdown 内容。
+- `src/bridge/feishu.mjs` 改为复用 `buildFeishuReplyPayload`：
+  - 普通文本 -> `text`
+  - Markdown 内容 -> `interactive` + `markdown`
+- 文档同步更新：
+  - `README.md`
+  - `RELEASE_NOTES_v0.2.0.md`
+
+涉及文件：
+- src/bridge/reply-format.mjs
+- src/bridge/feishu.mjs
+- README.md
+- RELEASE_NOTES_v0.2.0.md
+
+验证记录：
+- node --check src/bridge/feishu.mjs
+- node --check src/bridge/reply-format.mjs
+- 结果：通过
