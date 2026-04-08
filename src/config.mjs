@@ -67,6 +67,7 @@ export const config = {
     fileTempDir: process.env.FEISHU_FILE_TEMP_DIR?.trim() || "data/feishu-files",
     fileMaxBytes: toInt(process.env.FEISHU_FILE_MAX_BYTES, 20 * 1024 * 1024),
     fileMaxTextChars: toInt(process.env.FEISHU_FILE_MAX_TEXT_CHARS, 20000),
+    skillDir: process.env.FEISHU_SKILL_DIR?.trim() || "data/skills",
   },
   maxPayloadBytes: 1024 * 1024,
 };

@@ -4,6 +4,90 @@ import path from "node:path";
 import { config } from "../config.mjs";
 import { createGatewayClient } from "./gateway-client.mjs";
 
+/* ── skill helpers ───────────────────────────────────────────── */
+
+const SKILL_NAME_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+
+function validateSkillName(name) {
+  if (!name || !SKILL_NAME_RE.test(name)) {
+    throw new Error(
+      "skill name 只允许英文字母、数字、下划线、短横线，长度 1-64",
+    );
+  }
+}
+
+async function skillAdd(skillDir, name, content) {
+  validateSkillName(name);
+  if (!content) {
+    throw new Error("usage: /skill add <name> <content>");
+  }
+  await fs.mkdir(skillDir, { recursive: true });
+  const filePath = path.join(skillDir, `${name}.md`);
+  await fs.writeFile(filePath, content, "utf8");
+  return `skill "${name}" 已保存`;
+}
+
+async function skillRemove(skillDir, name) {
+  validateSkillName(name);
+  const filePath = path.join(skillDir, `${name}.md`);
+  try {
+    await fs.unlink(filePath);
+  } catch (e) {
+    if (e.code === "ENOENT") {
+      throw new Error(`skill "${name}" 不存在`);
+    }
+    throw e;
+  }
+  return `skill "${name}" 已删除`;
+}
+
+async function skillList(skillDir) {
+  let entries;
+  try {
+    entries = await fs.readdir(skillDir);
+  } catch (e) {
+    if (e.code === "ENOENT") {
+      return "当前没有任何 skill";
+    }
+    throw e;
+  }
+  const names = entries
+    .filter((f) => f.endsWith(".md"))
+    .map((f) => f.slice(0, -3));
+  if (names.length === 0) {
+    return "当前没有任何 skill";
+  }
+  return ["已注册 skill:", ...names.map((n) => `  - ${n}`)].join("\n");
+}
+
+async function loadAllSkills(skillDir) {
+  let entries;
+  try {
+    entries = await fs.readdir(skillDir);
+  } catch {
+    return "";
+  }
+  const mdFiles = entries.filter((f) => f.endsWith(".md")).sort();
+  if (mdFiles.length === 0) {
+    return "";
+  }
+  const parts = [];
+  for (const file of mdFiles) {
+    const name = file.slice(0, -3);
+    const content = await fs.readFile(path.join(skillDir, file), "utf8");
+    parts.push(`### skill: ${name}\n${content.trim()}`);
+  }
+  return parts.join("\n\n");
+}
+
+async function prependSkills(skillDir, prompt) {
+  const skills = await loadAllSkills(skillDir);
+  if (!skills) {
+    return prompt;
+  }
+  return `请先阅读以下技能说明，然后再执行用户指令：\n\n${skills}\n\n---\n用户指令：${prompt}`;
+}
+
 function maskSecret(value) {
   if (!value) {
     return "";
@@ -312,7 +396,7 @@ function withFeishuNotificationTarget(params, { chatId, senderOpenId }) {
   };
 }
 
-async function routeCommand({ text, sessionId, gatewayClient, copilotCfg, chatId, senderOpenId }) {
+async function routeCommand({ text, sessionId, gatewayClient, copilotCfg, feishuCfg, chatId, senderOpenId }) {
   const command = splitCommandText(text);
   if (!command) {
     return null;
@@ -325,6 +409,9 @@ async function routeCommand({ text, sessionId, gatewayClient, copilotCfg, chatId
       "支持命令:",
       "/copilot <prompt>",
       "/agent <text>",
+      "/skill list",
+      "/skill add <name> <content>",
+      "/skill remove <name>",
       "/cron list",
       "/cron run <jobId>",
       "/cron remove <jobId>",
@@ -341,8 +428,35 @@ async function routeCommand({ text, sessionId, gatewayClient, copilotCfg, chatId
     if (!prompt) {
       throw new Error("usage: /copilot <prompt>");
     }
-    const payload = await gatewayClient.request("copilot", { prompt });
+    const finalPrompt = await prependSkills(feishuCfg.skillDir, prompt);
+    const payload = await gatewayClient.request("copilot", { prompt: finalPrompt });
     return String(payload?.output ?? "").trim() || "(empty output)";
+  }
+
+  if (cmd === "/skill") {
+    if (!rest) {
+      throw new Error("usage: /skill <list|add|remove> ...");
+    }
+    const [actionRaw, ...parts] = rest.split(/\s+/);
+    const action = String(actionRaw ?? "").toLowerCase();
+    const skillDir = feishuCfg.skillDir;
+
+    if (action === "list") {
+      return skillList(skillDir);
+    }
+    if (action === "add") {
+      const name = String(parts[0] ?? "").trim();
+      const content = rest.slice("add".length).trim().slice(name.length).trim();
+      return skillAdd(skillDir, name, content);
+    }
+    if (action === "remove") {
+      const name = String(parts[0] ?? "").trim();
+      if (!name) {
+        throw new Error("usage: /skill remove <name>");
+      }
+      return skillRemove(skillDir, name);
+    }
+    throw new Error("usage: /skill <list|add|remove> ...");
   }
 
   if (cmd === "/agent") {
@@ -596,6 +710,7 @@ dispatcher.register({
         sessionId,
         gatewayClient,
         copilotCfg,
+        feishuCfg,
         chatId,
         senderOpenId,
       });
@@ -665,6 +780,7 @@ dispatcher.register({
         if (!prompt) {
           return;
         }
+        prompt = await prependSkills(feishuCfg.skillDir, prompt);
         console.log(
           `[feishu-bridge] copilot request from user=${senderOpenId} kind=${inbound.kind} prompt=${clipText(prompt, 120)}`,
         );
