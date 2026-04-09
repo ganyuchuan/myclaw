@@ -56,7 +56,7 @@ myclaw/
 │     └─ http-server.mjs
 ├─ data/
 │  ├─ cron-jobs.json
-│  └─ cron-sync-db.json
+│  └─ cron-jobs-sync.json
 ├─ docker-compose.yml
 ├─ package.json
 ├─ .env.example
@@ -104,7 +104,7 @@ services:
     restart: unless-stopped
     environment:
       SYNC_PORT: "18790"
-      SYNC_DB_FILE: "data/cron-sync-db.json"
+      SYNC_DB_FILE: "data/cron-jobs-sync.json"
     ports:
       - "18790:18790"
     volumes:
@@ -160,7 +160,7 @@ WORKDIR /app
 COPY src/sync/http-server.mjs ./src/sync/http-server.mjs
 RUN mkdir -p /app/data
 ENV SYNC_PORT=18790
-ENV SYNC_DB_FILE=data/cron-sync-db.json
+ENV SYNC_DB_FILE=data/cron-jobs-sync.json
 EXPOSE 18790
 CMD ["node", "src/sync/http-server.mjs"]
 ```

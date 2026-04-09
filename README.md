@@ -148,7 +148,7 @@ curl http://127.0.0.1:18790/health
 - `SYNC_TIMEOUT_MS`: sync request timeout (default `5000`)
 - `SYNC_NODE_ID`: node identity written to synced records (default `myclaw-local`)
 - `SYNC_PORT`: sync server port (default `18790`)
-- `SYNC_DB_FILE`: sync server persistence file (default `data/cron-sync-db.json`)
+- `SYNC_DB_FILE`: sync server persistence file (default `data/cron-jobs-sync.json`)
 
 OpenAI Responses example:
 
