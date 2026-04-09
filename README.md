@@ -391,6 +391,28 @@ FEISHU_REQUEST_TIMEOUT_MS=130000
 }
 ```
 
+如需将完成事件推送给 WebSocket 客户端，可选传入 `notify`（机制参考 feishu 通知）：
+
+```json
+{
+  "type": "req", "id": "11b", "method": "cron.add",
+  "params": {
+    "name": "一次性 copilot 任务",
+    "schedule": { "type": "at", "value": "2026-04-09T12:30:00+08:00" },
+    "payload": { "action": "copilot", "params": { "prompt": "总结今天工作" } },
+    "notify": { "type": "ws", "clientId": "cli" }
+  }
+}
+```
+
+`notify.type=ws` 支持以下目标字段：
+
+- `connId`：仅推送到指定连接
+- `clientId`：推送到握手 `connect.params.client.id` 匹配的连接
+- 不传目标字段：推送给全部已连接客户端
+
+如果任务不带 `notify`，默认也会广播 `cron.finished` 事件到全部已连接客户端。
+
 **cron.update** — 更新任务（传 id + 要改的字段）
 
 ```json
@@ -410,6 +432,31 @@ FEISHU_REQUEST_TIMEOUT_MS=130000
 
 ```json
 { "type": "req", "id": "14", "method": "cron.run", "params": { "id": "<job-id>" } }
+```
+
+### WebSocket 事件
+
+握手成功后，`hello-ok.features.events` 会包含：
+
+- `tick`
+- `cron.finished`
+
+`cron.finished` 事件示例：
+
+```json
+{
+  "type": "event",
+  "event": "cron.finished",
+  "payload": {
+    "ts": 1775709000000,
+    "job": { "id": "job-uuid", "name": "一次性 copilot 任务", "action": "copilot" },
+    "trigger": "scheduled",
+    "status": "ok",
+    "error": null,
+    "output": "...",
+    "notify": { "type": "ws", "clientId": "cli" }
+  }
+}
 ```
 
 ### 持久化

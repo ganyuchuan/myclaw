@@ -47,7 +47,7 @@ export function makeHello(connId, methods) {
     },
     features: {
       methods,
-      events: ["tick"],
+      events: ["tick", "cron.finished"],
     },
   };
 }
