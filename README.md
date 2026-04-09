@@ -40,6 +40,37 @@ npm start
 npm run bridge:feishu
 ```
 
+## 使用 wscat 工具与网关进行通信
+
+- 安装（可选全局或用 npx）：  
+
+```bash
+npm install -g wscat
+# 或者不安装，直接用 npx
+npx wscat -c ws://127.0.0.1:18789/ws
+```
+
+- 交互式连接并发送 JSON 帧：运行上面命令后会进入交互模式，直接粘贴下面的握手帧并回车（替换 `dev-token`）：
+```json
+{ "type": "req", "id": "1", "method": "connect", "params": { "auth": { "token": "dev-token" }, "client": { "id": "cli", "version": "0.1.0" } } }
+```
+收到握手成功后，就可以开始发送各种方法的请求帧：
+```json
+{ "type": "req", "id": "2", "method": "cron.list", "params": {} }
+```
+服务器会返回类似的响应帧，查看 `payload.jobs`。
+
+- 非交互式（一次性发送并退出）：
+```bash
+printf '%s\n' '{"type":"req","id":"1","method":"connect","params":{"auth":{"token":"dev-token"},"client":{"id":"cli","version":"0.1.0"}}}' | npx wscat -c ws://127.0.0.1:18789/ws
+```
+（注意：一次性管道方式在需要多帧交互时不太方便，交互模式更适合连续请求/响应）
+
+- 其他常用提示：
+  - 使用 `wss://` 连接安全 WebSocket；若自签名证书可能需要额外参数或临时信任证书（这取决于本地环境）。
+  - 若想脚本化或自动重连/超时，考虑用 `websocket-as-promised` / `ws` 等库写小脚本（仓库已有 gateway-client.mjs 可直接复用）。
+
+
 ## Source Archive 安装与启动（无 Docker）
 
 适用于通过 Git Tag + Source Archive 发布的源码产物。
