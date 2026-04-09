@@ -1,6 +1,14 @@
 import { execFile } from "node:child_process";
 
 let sharedCopilotSessionId = "";
+let sharedSessionQueue = Promise.resolve();
+
+function withSharedSessionLock(task) {
+  const run = sharedSessionQueue.then(task, task);
+  // Keep queue alive even when one task fails.
+  sharedSessionQueue = run.catch(() => {});
+  return run;
+}
 
 function buildCopilotArgs({ prompt, config, resumeSessionId, outputJson }) {
   const args = ["copilot", "-p", prompt, "-s", "--no-ask-user"];
@@ -157,6 +165,7 @@ export function setSharedCopilotSessionId(sessionId) {
 
 export function resetSharedCopilotSessionId() {
   sharedCopilotSessionId = "";
+  sharedSessionQueue = Promise.resolve();
 }
 
 /**
@@ -173,15 +182,17 @@ export async function runCopilotWithSharedSession({ prompt, config }) {
     return { output, sessionId: "" };
   }
 
-  const { output, sessionId } = await runCopilotWithSession({
-    prompt,
-    config,
-    resumeSessionId: sharedCopilotSessionId,
+  return withSharedSessionLock(async () => {
+    const { output, sessionId } = await runCopilotWithSession({
+      prompt,
+      config,
+      resumeSessionId: sharedCopilotSessionId,
+    });
+
+    if (sessionId) {
+      sharedCopilotSessionId = sessionId;
+    }
+
+    return { output, sessionId: sharedCopilotSessionId };
   });
-
-  if (sessionId) {
-    sharedCopilotSessionId = sessionId;
-  }
-
-  return { output, sessionId: sharedCopilotSessionId };
 }
