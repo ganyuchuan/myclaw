@@ -46,7 +46,7 @@ function runGhCopilot({ args, config }) {
       args,
       {
         timeout: config.timeoutMs,
-        maxBuffer: 8 * 1024 * 1024,
+        maxBuffer: 64 * 1024 * 1024,
         cwd,
         env: { ...process.env },
       },
