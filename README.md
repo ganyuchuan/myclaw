@@ -280,7 +280,7 @@ Feishu bridge 通过 `config.copilot.enabled` 全局切换消息路由：
 2. 对原消息贴飞书原生 `OnIt` 表情，提示用户"正在处理"
 3. 根据 `COPILOT_ENABLED` 分发到 copilot 或 agent
 4. 将结果以文本回复到原消息
-5. 处理过程中的任何错误都会以 `[错误] ...` 文本回复到原消息
+5. 处理过程中的任何错误都会以 `[error] ...` 文本回复到原消息
 
 ## 超时配置
 

@@ -820,7 +820,7 @@ dispatcher.register({
           feishuClient,
           chatId,
           replyToMessageId: messageId,
-          text: `[错误] ${String(error?.message ?? error).slice(0, 500)}`,
+          text: `[error] ${String(error?.message ?? error)}`,
           renderAsMarkdown: feishuCfg.replyMarkdown,
         });
       } catch (replyError) {
