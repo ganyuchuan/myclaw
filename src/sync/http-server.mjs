@@ -9,7 +9,7 @@ function toInt(value, fallback) {
 }
 
 const port = toInt(process.env.SYNC_PORT, 18790);
-const dbFile = process.env.SYNC_DB_FILE?.trim() || "data/cron-sync-db.json";
+const dbFile = process.env.SYNC_DB_FILE?.trim() || "data/cron-jobs-sync.json";
 
 function getLanIPv4Addresses() {
   const interfaces = os.networkInterfaces();
