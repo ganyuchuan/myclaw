@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "../config.mjs";
 import { createGatewayClient } from "./gateway-client.mjs";
+import { buildFeishuReplyPayload } from "./reply-format.mjs";
 
 /* ── skill helpers ───────────────────────────────────────────── */
 
@@ -545,30 +546,8 @@ async function resolveBotOpenId(feishuClient) {
   }
 }
 
-function buildFeishuContent(text, renderAsMarkdown) {
-  if (!renderAsMarkdown) {
-    return {
-      msgType: "text",
-      content: JSON.stringify({ text }),
-    };
-  }
-
-  return {
-    msgType: "interactive",
-    content: JSON.stringify({
-      config: { wide_screen_mode: true },
-      elements: [
-        {
-          tag: "markdown",
-          content: String(text ?? ""),
-        },
-      ],
-    }),
-  };
-}
-
 async function sendFeishuText({ feishuClient, chatId, replyToMessageId, text, renderAsMarkdown = false }) {
-  const payload = buildFeishuContent(text, renderAsMarkdown);
+  const payload = buildFeishuReplyPayload(text, renderAsMarkdown);
   if (replyToMessageId) {
     await feishuClient.im.message.reply({
       path: { message_id: replyToMessageId },
