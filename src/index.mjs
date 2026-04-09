@@ -4,6 +4,7 @@ import { createCronScheduler } from "./cron/scheduler.mjs";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { runCopilotWithSharedSession } from "./tool/copilot.mjs";
 import { createSyncClient } from "./sync/client.mjs";
+import { looksLikeMarkdown } from "./bridge/reply-format.mjs";
 
 function normalizeFeishuDomain(domain) {
   if (domain === "lark") {
@@ -12,18 +13,41 @@ function normalizeFeishuDomain(domain) {
   return Lark.Domain.Feishu;
 }
 
-async function sendFeishuNotification({ client, target, text }) {
+function buildNotificationPayload(text, renderAsMarkdown = false) {
+  const normalized = String(text ?? "");
+  if (!renderAsMarkdown) {
+    return {
+      msgType: "text",
+      content: JSON.stringify({ text: normalized }),
+    };
+  }
+
+  return {
+    msgType: "interactive",
+    content: JSON.stringify({
+      config: { wide_screen_mode: true },
+      elements: [
+        {
+          tag: "markdown",
+          content: normalized,
+        },
+      ],
+    }),
+  };
+}
+
+async function sendFeishuNotification({ client, target, text, renderAsMarkdown = false }) {
   if (!target?.chatId) {
     return;
   }
 
-  const content = JSON.stringify({ text });
+  const payload = buildNotificationPayload(text, renderAsMarkdown);
   await client.im.message.create({
     params: { receive_id_type: "chat_id" },
     data: {
       receive_id: target.chatId,
-      msg_type: "text",
-      content,
+      msg_type: payload.msgType,
+      content: payload.content,
     },
   });
 }
@@ -102,9 +126,17 @@ if (config.cron.enabled) {
       `action: ${job.payload?.action ?? "unknown"}`,
     ];
 
+    const outputText = typeof output === "string" ? output.trim() : "";
+    const outputIsMarkdown = status === "ok" && outputText ? looksLikeMarkdown(outputText) : false;
+
     if (status === "ok") {
-      if (typeof output === "string" && output.trim()) {
-        lines.push(`output: ${output.slice(0, 1500)}`);
+      if (outputText) {
+        if (outputIsMarkdown) {
+          lines.push("output:");
+          lines.push(outputText.slice(0, 1500));
+        } else {
+          lines.push(`output: ${outputText.slice(0, 1500)}`);
+        }
       }
     } else if (error) {
       lines.push(`error: ${error}`);
@@ -114,6 +146,7 @@ if (config.cron.enabled) {
       client: feishuNotifyClient,
       target: job.notify,
       text: lines.join("\n"),
+      renderAsMarkdown: outputIsMarkdown,
     });
   });
 
