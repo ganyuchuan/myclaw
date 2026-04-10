@@ -40,6 +40,37 @@ npm start
 npm run bridge:feishu
 ```
 
+## 使用 wscat 工具与网关进行通信
+
+- 安装（可选全局或用 npx）：  
+
+```bash
+npm install -g wscat
+# 或者不安装，直接用 npx
+npx wscat -c ws://127.0.0.1:18789/ws
+```
+
+- 交互式连接并发送 JSON 帧：运行上面命令后会进入交互模式，直接粘贴下面的握手帧并回车（替换 `dev-token`）：
+```json
+{ "type": "req", "id": "1", "method": "connect", "params": { "auth": { "token": "dev-token" }, "client": { "id": "cli", "version": "0.1.0" } } }
+```
+收到握手成功后，就可以开始发送各种方法的请求帧：
+```json
+{ "type": "req", "id": "2", "method": "cron.list", "params": {} }
+```
+服务器会返回类似的响应帧，查看 `payload.jobs`。
+
+- 非交互式（一次性发送并退出）：
+```bash
+printf '%s\n' '{"type":"req","id":"1","method":"connect","params":{"auth":{"token":"dev-token"},"client":{"id":"cli","version":"0.1.0"}}}' | npx wscat -c ws://127.0.0.1:18789/ws
+```
+（注意：一次性管道方式在需要多帧交互时不太方便，交互模式更适合连续请求/响应）
+
+- 其他常用提示：
+  - 使用 `wss://` 连接安全 WebSocket；若自签名证书可能需要额外参数或临时信任证书（这取决于本地环境）。
+  - 若想脚本化或自动重连/超时，考虑用 `websocket-as-promised` / `ws` 等库写小脚本（仓库已有 gateway-client.mjs 可直接复用）。
+
+
 ## Source Archive 安装与启动（无 Docker）
 
 适用于通过 Git Tag + Source Archive 发布的源码产物。
@@ -390,6 +421,28 @@ FEISHU_REQUEST_TIMEOUT_MS=130000
 }
 ```
 
+如需将完成事件推送给 WebSocket 客户端，可选传入 `notify`（机制参考 feishu 通知）：
+
+```json
+{
+  "type": "req", "id": "11b", "method": "cron.add",
+  "params": {
+    "name": "一次性 copilot 任务",
+    "schedule": { "type": "at", "value": "2026-04-09T12:30:00+08:00" },
+    "payload": { "action": "copilot", "params": { "prompt": "总结今天工作" } },
+    "notify": { "type": "ws", "clientId": "cli" }
+  }
+}
+```
+
+`notify.type=ws` 支持以下目标字段：
+
+- `connId`：仅推送到指定连接
+- `clientId`：推送到握手 `connect.params.client.id` 匹配的连接
+- 不传目标字段：推送给全部已连接客户端
+
+如果任务不带 `notify`，默认也会广播 `cron.finished` 事件到全部已连接客户端。
+
 **cron.update** — 更新任务（传 id + 要改的字段）
 
 ```json
@@ -409,6 +462,31 @@ FEISHU_REQUEST_TIMEOUT_MS=130000
 
 ```json
 { "type": "req", "id": "14", "method": "cron.run", "params": { "id": "<job-id>" } }
+```
+
+### WebSocket 事件
+
+握手成功后，`hello-ok.features.events` 会包含：
+
+- `tick`
+- `cron.finished`
+
+`cron.finished` 事件示例：
+
+```json
+{
+  "type": "event",
+  "event": "cron.finished",
+  "payload": {
+    "ts": 1775709000000,
+    "job": { "id": "job-uuid", "name": "一次性 copilot 任务", "action": "copilot" },
+    "trigger": "scheduled",
+    "status": "ok",
+    "error": null,
+    "output": "...",
+    "notify": { "type": "ws", "clientId": "cli" }
+  }
+}
 ```
 
 ### 持久化

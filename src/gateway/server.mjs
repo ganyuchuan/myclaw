@@ -17,6 +17,67 @@ export function createGatewayServer(config, { cronScheduler } = {}) {
   const sessions = new Map();
   const connections = new Map();
 
+  const sendEventFrame = (socket, event, payload) => {
+    if (!socket || socket.readyState !== socket.OPEN) {
+      return;
+    }
+    socket.send(JSON.stringify({ type: "event", event, payload }));
+  };
+
+  const shouldPushCronEventToConnection = (connId, state, notify) => {
+    if (!state.connected) {
+      return false;
+    }
+
+    if (!notify || typeof notify !== "object" || Array.isArray(notify)) {
+      return true;
+    }
+
+    if (notify.type !== "ws") {
+      return false;
+    }
+
+    if (typeof notify.connId === "string" && notify.connId.trim()) {
+      return notify.connId === connId;
+    }
+
+    if (typeof notify.clientId === "string" && notify.clientId.trim()) {
+      return state.client?.id === notify.clientId;
+    }
+
+    return true;
+  };
+
+  const broadcastCronFinishedEvent = ({ job, trigger, status, error, output }) => {
+    const payload = {
+      ts: Date.now(),
+      job: {
+        id: job?.id,
+        name: job?.name,
+        action: job?.payload?.action,
+      },
+      trigger,
+      status,
+      error: error || null,
+      output,
+      notify: job?.notify,
+    };
+
+    for (const [connId, state] of connections.entries()) {
+      if (!shouldPushCronEventToConnection(connId, state, job?.notify)) {
+        continue;
+      }
+      sendEventFrame(state.socket, "cron.finished", payload);
+    }
+  };
+
+  const unsubscribeCronFinished =
+    cronScheduler && typeof cronScheduler.onJobFinished === "function"
+      ? cronScheduler.onJobFinished((event) => {
+          broadcastCronFinishedEvent(event);
+        })
+      : null;
+
   const httpServer = createServer((req, res) => {
     if (req.method === "GET" && req.url === "/health") {
       const payload = JSON.stringify({
@@ -39,16 +100,7 @@ export function createGatewayServer(config, { cronScheduler } = {}) {
 
   const tick = setInterval(() => {
     for (const [connId, state] of connections.entries()) {
-      if (state.socket.readyState !== state.socket.OPEN) {
-        continue;
-      }
-      state.socket.send(
-        JSON.stringify({
-          type: "event",
-          event: "tick",
-          payload: { ts: Date.now(), connId },
-        }),
-      );
+      sendEventFrame(state.socket, "tick", { ts: Date.now(), connId });
     }
   }, 10_000);
 
@@ -324,6 +376,9 @@ export function createGatewayServer(config, { cronScheduler } = {}) {
     },
     close() {
       clearInterval(tick);
+      if (typeof unsubscribeCronFinished === "function") {
+        unsubscribeCronFinished();
+      }
       for (const state of connections.values()) {
         state.socket.close();
       }
