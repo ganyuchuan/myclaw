@@ -412,7 +412,7 @@
 
 ### 16) Copilot 流式事件打通到 Gateway 与 Feishu
 
-关联提交：本次提交（见 `git log`）
+关联提交：`acaa04f`
 
 变更目标：
 - 基于 Copilot SDK 流式事件，在响应尚未完成时即可将增量内容实时推送到 gateway 与 feishu，提升交互即时性。
