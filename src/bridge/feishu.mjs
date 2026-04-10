@@ -273,7 +273,11 @@ function makeStreamId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
 }
 
-function createCopilotStreamManager({ feishuClient }) {
+function createCopilotStreamManager({
+  feishuClient,
+  flushIntervalMs = 800,
+  minChunkChars = 120,
+}) {
   const streams = new Map();
 
   const enqueueFlush = (streamId, { force = false } = {}) => {
@@ -289,7 +293,7 @@ function createCopilotStreamManager({ feishuClient }) {
         }
 
         const now = Date.now();
-        if (!force && state.buffer.length < 120 && now - state.lastFlushAtMs < 800) {
+        if (!force && state.buffer.length < minChunkChars && now - state.lastFlushAtMs < flushIntervalMs) {
           return;
         }
 
@@ -567,8 +571,16 @@ const wsClient = new Lark.WSClient({
   loggerLevel: Lark.LoggerLevel.info,
 });
 
-const copilotStreamManager = createCopilotStreamManager({ feishuClient });
+const copilotStreamManager = createCopilotStreamManager({
+  feishuClient,
+  flushIntervalMs: feishuCfg.copilotStreamFlushIntervalMs,
+  minChunkChars: feishuCfg.copilotStreamMinChunkChars,
+});
 gatewayClient.onEvent((frame) => {
+  if (!feishuCfg.copilotStreamEnabled) {
+    return;
+  }
+
   if (frame?.event === "copilot.delta") {
     const streamId = String(frame?.payload?.streamId ?? "");
     if (!streamId) {
@@ -593,6 +605,9 @@ let warnedUnknownBotOpenId = false;
 
 console.log(
   `[feishu-bridge] config: appId=${maskSecret(feishuCfg.appId)} domain=${feishuCfg.domain} mode=${feishuCfg.connectionMode} requireMentionInGroup=${feishuCfg.requireMentionInGroup}`,
+);
+console.log(
+  `[feishu-bridge] copilot stream: enabled=${feishuCfg.copilotStreamEnabled} flushIntervalMs=${feishuCfg.copilotStreamFlushIntervalMs} minChunkChars=${feishuCfg.copilotStreamMinChunkChars}`,
 );
 console.log(`[feishu-bridge] gateway: ${feishuCfg.gatewayUrl} clientId=${feishuCfg.clientId}`);
 console.log(`[feishu-bridge] botOpenId: ${botOpenId || "unknown"}`);
@@ -666,6 +681,10 @@ dispatcher.register({
       let reply;
 
       const runCopilotRequest = async (prompt) => {
+        if (!feishuCfg.copilotStreamEnabled) {
+          return gatewayClient.request("copilot", { prompt });
+        }
+
         const effectiveStreamId = copilotStreamManager.create(chatId, messageId);
 
         try {

@@ -67,6 +67,9 @@ export const config = {
     fileTempDir: process.env.FEISHU_FILE_TEMP_DIR?.trim() || "data/feishu-files",
     fileMaxBytes: toInt(process.env.FEISHU_FILE_MAX_BYTES, 20 * 1024 * 1024),
     fileMaxTextChars: toInt(process.env.FEISHU_FILE_MAX_TEXT_CHARS, 20000),
+    copilotStreamEnabled: toBool(process.env.FEISHU_COPILOT_STREAM_ENABLED, true),
+    copilotStreamFlushIntervalMs: toInt(process.env.FEISHU_COPILOT_STREAM_FLUSH_INTERVAL_MS, 800),
+    copilotStreamMinChunkChars: toInt(process.env.FEISHU_COPILOT_STREAM_MIN_CHUNK_CHARS, 120),
   },
   maxPayloadBytes: 1024 * 1024,
 };

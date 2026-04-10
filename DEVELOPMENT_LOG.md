@@ -445,3 +445,34 @@
 - node --check src/bridge/feishu.mjs
 - 结果：通过
 
+---
+
+### 17) Feishu Copilot 流式开关与节流参数可配置化
+
+关联提交：本次提交（见 `git log`）
+
+变更目标：
+- 将飞书侧 copilot 流式推送从硬编码改为环境变量可配置，便于按不同群聊负载调优实时性与消息频率。
+
+主要改动：
+- `src/config.mjs`
+  - 新增配置项：
+    - `FEISHU_COPILOT_STREAM_ENABLED`（默认 `true`）
+    - `FEISHU_COPILOT_STREAM_FLUSH_INTERVAL_MS`（默认 `800`）
+    - `FEISHU_COPILOT_STREAM_MIN_CHUNK_CHARS`（默认 `120`）
+- `src/bridge/feishu.mjs`
+  - 流式管理器改为读取可配置 `flushIntervalMs` 与 `minChunkChars`。
+  - 当 `FEISHU_COPILOT_STREAM_ENABLED=false` 时：
+    - 不处理 `copilot.delta/done` 事件。
+    - `copilot` 请求改为非流式（等待完整响应后回发）。
+  - 启动日志打印当前流式配置，便于线上排查。
+- `.env.example`
+  - 增加上述 3 个参数示例值。
+- `README.md`
+  - 补充 3 个参数的用途、推荐配置与调优建议。
+
+验证记录：
+- node --check src/config.mjs
+- node --check src/bridge/feishu.mjs
+- 结果：通过
+

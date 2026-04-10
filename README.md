@@ -133,6 +133,9 @@ curl http://127.0.0.1:18790/health
 - `FEISHU_FILE_TEMP_DIR`: local temp directory for downloaded Feishu files (default `data/feishu-files`)
 - `FEISHU_FILE_MAX_BYTES`: max accepted file size in bytes (default `20971520`)
 - `FEISHU_FILE_MAX_TEXT_CHARS`: max chars kept when reading md/txt file content (default `20000`)
+- `FEISHU_COPILOT_STREAM_ENABLED`: enable delta streaming push in Feishu copilot replies (`true`/`false`, default `true`)
+- `FEISHU_COPILOT_STREAM_FLUSH_INTERVAL_MS`: min interval between streaming flushes in Feishu bridge (default `800`)
+- `FEISHU_COPILOT_STREAM_MIN_CHUNK_CHARS`: min buffered chars before early flush in Feishu bridge (default `120`)
 - `COPILOT_ENABLED`: enable gh copilot tool (`true`/`false`, default `true`)
 - `COPILOT_TIMEOUT_MS`: timeout for Copilot SDK `sendAndWait` (default `120000`)
 - `COPILOT_MODEL`: model to use (empty = copilot default)
@@ -281,6 +284,33 @@ Feishu bridge 通过 `config.copilot.enabled` 全局切换消息路由：
 3. 根据 `COPILOT_ENABLED` 分发到 copilot 或 agent
 4. 将结果以文本回复到原消息
 5. 处理过程中的任何错误都会以 `[error] ...` 文本回复到原消息
+
+### Feishu Copilot 流式参数使用说明
+
+可通过以下参数控制飞书侧流式回推行为：
+
+- `FEISHU_COPILOT_STREAM_ENABLED`
+  - `true`: 开启流式分片推送（边生成边回发）
+  - `false`: 关闭流式推送，等待完整输出后一次性回复
+- `FEISHU_COPILOT_STREAM_FLUSH_INTERVAL_MS`
+  - 分片推送的最小时间间隔（毫秒）
+  - 值越小越实时，但消息更频繁
+- `FEISHU_COPILOT_STREAM_MIN_CHUNK_CHARS`
+  - 缓冲区达到该字符数时可提前 flush
+  - 值越小越灵敏，值越大越省消息数
+
+推荐配置示例：
+
+```dotenv
+FEISHU_COPILOT_STREAM_ENABLED=true
+FEISHU_COPILOT_STREAM_FLUSH_INTERVAL_MS=800
+FEISHU_COPILOT_STREAM_MIN_CHUNK_CHARS=120
+```
+
+调优建议：
+
+- 偏实时：`FLUSH_INTERVAL_MS=300~500`，`MIN_CHUNK_CHARS=40~80`
+- 偏节流：`FLUSH_INTERVAL_MS=1000~1500`，`MIN_CHUNK_CHARS=160~260`
 
 ## 超时配置
 
