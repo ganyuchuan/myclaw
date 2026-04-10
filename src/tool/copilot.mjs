@@ -21,6 +21,7 @@ function buildSessionConfig(config) {
   const sessionConfig = {
     onPermissionRequest: config.allowAllTools ? approveAll : denyAllPermissions,
     workingDirectory: config.workDir || process.cwd(),
+    streaming: true,
   };
 
   if (config.model) {
@@ -67,21 +68,44 @@ async function createOrResumeSession({ client, config, resumeSessionId = "" }) {
   return client.createSession(sessionConfig);
 }
 
-async function runSessionPrompt({ session, prompt, timeoutMs }) {
+async function runSessionPrompt({ session, prompt, timeoutMs, onDelta, onDone }) {
   const startedAt = Date.now();
   console.log(
     `[copilot-sdk] send prompt sessionId=${session.sessionId} timeoutMs=${timeoutMs}`,
   );
 
-  const event = await session.sendAndWait({ prompt }, timeoutMs);
-  const output = normalizeOutput(event);
-  const elapsedMs = Date.now() - startedAt;
+  let streamedOutput = "";
+  const unsubscribeDelta = typeof onDelta === "function"
+    ? session.on("assistant.message_delta", (event) => {
+        const delta = String(event?.data?.deltaContent ?? "");
+        if (!delta) {
+          return;
+        }
+        streamedOutput += delta;
+        onDelta(delta);
+      })
+    : null;
 
-  console.log(
-    `[copilot-sdk] done sessionId=${session.sessionId} elapsedMs=${elapsedMs} outputChars=${output.length}`,
-  );
+  let output = "";
+  try {
+    const event = await session.sendAndWait({ prompt }, timeoutMs);
+    output = normalizeOutput(event) || streamedOutput.trim();
+    const elapsedMs = Date.now() - startedAt;
 
-  return { output, sessionId: session.sessionId };
+    console.log(
+      `[copilot-sdk] done sessionId=${session.sessionId} elapsedMs=${elapsedMs} outputChars=${output.length}`,
+    );
+
+    const result = { output, sessionId: session.sessionId };
+    if (typeof onDone === "function") {
+      onDone(result);
+    }
+    return result;
+  } finally {
+    if (unsubscribeDelta) {
+      unsubscribeDelta();
+    }
+  }
 }
 
 /**
@@ -111,7 +135,13 @@ export async function runCopilot({ prompt, config, resumeSessionId = "" }) {
  * @param {string} [options.resumeSessionId]
  * @returns {Promise<{ output: string, sessionId: string }>}
  */
-export async function runCopilotWithSession({ prompt, config, resumeSessionId = "" }) {
+export async function runCopilotWithSession({
+  prompt,
+  config,
+  resumeSessionId = "",
+  onDelta,
+  onDone,
+}) {
   const client = await ensureSdkClient(config);
   const session = await createOrResumeSession({
     client,
@@ -124,6 +154,8 @@ export async function runCopilotWithSession({ prompt, config, resumeSessionId = 
       session,
       prompt,
       timeoutMs: config.timeoutMs,
+      onDelta,
+      onDone,
     });
   } finally {
     await session.disconnect().catch(() => {});
@@ -173,11 +205,13 @@ async function getOrCreateSharedSession(config) {
  * @param {object} options.config
  * @returns {Promise<{ output: string, sessionId: string }>}
  */
-export async function runCopilotWithSharedSession({ prompt, config }) {
+export async function runCopilotWithSharedSession({ prompt, config, onDelta, onDone }) {
   if (!config?.reuseSession) {
     return runCopilotWithSession({
       prompt,
       config,
+      onDelta,
+      onDone,
     });
   }
 
@@ -188,6 +222,8 @@ export async function runCopilotWithSharedSession({ prompt, config }) {
         session,
         prompt,
         timeoutMs: config.timeoutMs,
+        onDelta,
+        onDone,
       });
       sharedCopilotSessionId = result.sessionId;
       return result;

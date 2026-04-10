@@ -408,3 +408,40 @@
 主要改动：
 - `maxBuffer` 从 8MB 调整为 64MB。
 
+---
+
+### 16) Copilot 流式事件打通到 Gateway 与 Feishu
+
+关联提交：本次提交（见 `git log`）
+
+变更目标：
+- 基于 Copilot SDK 流式事件，在响应尚未完成时即可将增量内容实时推送到 gateway 与 feishu，提升交互即时性。
+
+主要改动：
+- `src/tool/copilot.mjs`
+  - 开启 `streaming: true`。
+  - `runSessionPrompt` 增加 `onDelta/onDone` 回调。
+  - 订阅 `assistant.message_delta`，实时转发增量片段。
+  - 在最终输出为空时，回退使用累积的流式文本。
+- `src/gateway/server.mjs`
+  - `copilot` 方法支持 `stream` 与 `streamId` 参数。
+  - 新增 `event` 帧下发能力，推送：
+    - `copilot.delta`
+    - `copilot.done`
+- `src/gateway/protocol.mjs`
+  - `hello.features.events` 增加：`copilot.delta`、`copilot.done`。
+- `src/bridge/gateway-client.mjs`
+  - 支持 `event` 帧分发与 `onEvent` 订阅。
+- `src/bridge/feishu.mjs`
+  - 新增流式管理器（按 `streamId` 跟踪、聚合、节流 flush）。
+  - 订阅 gateway 事件并将流式片段增量推送回飞书。
+  - `/copilot` 与默认 copilot 路由统一走带 `stream=true` 的请求链路。
+
+验证记录：
+- node --check src/tool/copilot.mjs
+- node --check src/gateway/server.mjs
+- node --check src/gateway/protocol.mjs
+- node --check src/bridge/gateway-client.mjs
+- node --check src/bridge/feishu.mjs
+- 结果：通过
+

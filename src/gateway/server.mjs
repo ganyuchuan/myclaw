@@ -187,9 +187,44 @@ export function createGatewayServer(config, { cronScheduler } = {}) {
             return;
           }
 
+          const stream = Boolean(frame.params?.stream);
+          const streamId = String(frame.params?.streamId ?? frame.id).trim() || frame.id;
+
+          const sendEvent = (event, payload) => {
+            if (socket.readyState !== socket.OPEN) {
+              return;
+            }
+            socket.send(
+              JSON.stringify({
+                type: "event",
+                event,
+                payload,
+              }),
+            );
+          };
+
           const { output, sessionId } = await runCopilotWithSharedSession({
             prompt,
             config: config.copilot,
+            onDelta: stream
+              ? (delta) => {
+                  sendEvent("copilot.delta", {
+                    requestId: frame.id,
+                    streamId,
+                    delta,
+                  });
+                }
+              : undefined,
+            onDone: stream
+              ? ({ output: finalOutput, sessionId: finalSessionId }) => {
+                  sendEvent("copilot.done", {
+                    requestId: frame.id,
+                    streamId,
+                    outputChars: String(finalOutput ?? "").length,
+                    sessionId: finalSessionId || undefined,
+                  });
+                }
+              : undefined,
           });
 
           socket.send(

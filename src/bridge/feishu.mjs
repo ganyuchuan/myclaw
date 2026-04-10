@@ -269,6 +269,81 @@ function clipText(value, maxChars = 500) {
   return `${text.slice(0, maxChars)}...`;
 }
 
+function makeStreamId() {
+  return `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function createCopilotStreamManager({ feishuClient }) {
+  const streams = new Map();
+
+  const enqueueFlush = (streamId, { force = false } = {}) => {
+    const state = streams.get(streamId);
+    if (!state) {
+      return;
+    }
+
+    state.flushChain = state.flushChain
+      .then(async () => {
+        if (!state.buffer) {
+          return;
+        }
+
+        const now = Date.now();
+        if (!force && state.buffer.length < 120 && now - state.lastFlushAtMs < 800) {
+          return;
+        }
+
+        const chunk = state.buffer;
+        state.buffer = "";
+        state.lastFlushAtMs = now;
+
+        await sendFeishuText({
+          feishuClient,
+          chatId: state.chatId,
+          replyToMessageId: state.replyToMessageId,
+          text: `[stream] ${chunk}`,
+          renderAsMarkdown: false,
+        });
+      })
+      .catch((error) => {
+        console.warn(`[feishu-bridge] stream flush failed: ${String(error?.message ?? error)}`);
+      });
+  };
+
+  return {
+    create(chatId, replyToMessageId) {
+      const streamId = makeStreamId();
+      streams.set(streamId, {
+        chatId,
+        replyToMessageId,
+        buffer: "",
+        lastFlushAtMs: 0,
+        flushChain: Promise.resolve(),
+      });
+      return streamId;
+    },
+    pushDelta(streamId, delta) {
+      const state = streams.get(streamId);
+      if (!state) {
+        return;
+      }
+      state.buffer += String(delta ?? "");
+      enqueueFlush(streamId);
+    },
+    async finish(streamId) {
+      if (!streams.has(streamId)) {
+        return;
+      }
+      enqueueFlush(streamId, { force: true });
+      const state = streams.get(streamId);
+      if (state) {
+        await state.flushChain;
+      }
+      streams.delete(streamId);
+    },
+  };
+}
+
 function splitCommandText(text) {
   const raw = String(text ?? "").trim();
   if (!raw.startsWith("/")) {
@@ -313,7 +388,7 @@ function withFeishuNotificationTarget(params, { chatId, senderOpenId }) {
   };
 }
 
-async function routeCommand({ text, sessionId, gatewayClient, copilotCfg, chatId, senderOpenId }) {
+async function routeCommand({ text, sessionId, gatewayClient, runCopilotRequest, copilotCfg, chatId, senderOpenId }) {
   const command = splitCommandText(text);
   if (!command) {
     return null;
@@ -342,7 +417,7 @@ async function routeCommand({ text, sessionId, gatewayClient, copilotCfg, chatId
     if (!prompt) {
       throw new Error("usage: /copilot <prompt>");
     }
-    const payload = await gatewayClient.request("copilot", { prompt });
+    const payload = await runCopilotRequest(prompt);
     return String(payload?.output ?? "").trim() || "(empty output)";
   }
 
@@ -492,6 +567,26 @@ const wsClient = new Lark.WSClient({
   loggerLevel: Lark.LoggerLevel.info,
 });
 
+const copilotStreamManager = createCopilotStreamManager({ feishuClient });
+gatewayClient.onEvent((frame) => {
+  if (frame?.event === "copilot.delta") {
+    const streamId = String(frame?.payload?.streamId ?? "");
+    if (!streamId) {
+      return;
+    }
+    copilotStreamManager.pushDelta(streamId, frame?.payload?.delta ?? "");
+    return;
+  }
+
+  if (frame?.event === "copilot.done") {
+    const streamId = String(frame?.payload?.streamId ?? "");
+    if (!streamId) {
+      return;
+    }
+    void copilotStreamManager.finish(streamId);
+  }
+});
+
 const botOpenId = await resolveBotOpenId(feishuClient);
 const dedup = createMessageDedup();
 let warnedUnknownBotOpenId = false;
@@ -570,10 +665,28 @@ dispatcher.register({
     try {
       let reply;
 
+      const runCopilotRequest = async (prompt) => {
+        const effectiveStreamId = copilotStreamManager.create(chatId, messageId);
+
+        try {
+          const payload = await gatewayClient.request("copilot", {
+            prompt,
+            stream: true,
+            streamId: effectiveStreamId,
+          });
+          await copilotStreamManager.finish(effectiveStreamId);
+          return payload;
+        } catch (error) {
+          await copilotStreamManager.finish(effectiveStreamId);
+          throw error;
+        }
+      };
+
       const commandReply = await routeCommand({
         text,
         sessionId,
         gatewayClient,
+        runCopilotRequest,
         copilotCfg,
         chatId,
         senderOpenId,
@@ -647,7 +760,7 @@ dispatcher.register({
         console.log(
           `[feishu-bridge] copilot request from user=${senderOpenId} kind=${inbound.kind} prompt=${clipText(prompt, 120)}`,
         );
-        const copilotPayload = await gatewayClient.request("copilot", { prompt });
+        const copilotPayload = await runCopilotRequest(prompt);
         reply = String(copilotPayload?.output ?? "").trim();
       } else if (!reply) {
         if (inbound.kind === "image" || inbound.kind === "file") {

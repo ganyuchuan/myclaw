@@ -18,6 +18,7 @@ export function createGatewayClient({
   let socket = null;
   let connected = false;
   const pending = new Map();
+  const eventHandlers = new Set();
 
   const clearPending = (error) => {
     for (const entry of pending.values()) {
@@ -83,7 +84,22 @@ export function createGatewayClient({
 
     socket.on("message", (buffer) => {
       const frame = safeParseJson(buffer.toString("utf8"));
-      if (!frame || frame.type !== "res" || typeof frame.id !== "string") {
+      if (!frame || typeof frame !== "object") {
+        return;
+      }
+
+      if (frame.type === "event") {
+        for (const handler of eventHandlers) {
+          try {
+            handler(frame);
+          } catch {
+            // Ignore listener errors so they don't break socket handling.
+          }
+        }
+        return;
+      }
+
+      if (frame.type !== "res" || typeof frame.id !== "string") {
         return;
       }
 
@@ -133,6 +149,12 @@ export function createGatewayClient({
   return {
     connect,
     request,
+    onEvent(handler) {
+      eventHandlers.add(handler);
+      return () => {
+        eventHandlers.delete(handler);
+      };
+    },
     close,
     isConnected: () => connected,
   };
