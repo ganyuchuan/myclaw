@@ -327,3 +327,84 @@
 - node --check src/bridge/feishu.mjs
 - node --check src/bridge/reply-format.mjs
 - 结果：通过
+
+---
+
+## 2026-04-10
+
+### 12) Copilot 执行链路切换到 GitHub Copilot SDK
+
+关联提交：`e307450`
+
+变更目标：
+- 用 `@github/copilot-sdk` 替换原 `gh copilot` 子进程调用，统一走 SDK 会话接口。
+- 保持 gateway / feishu / cron 上层调用接口不变，降低迁移风险。
+
+主要改动：
+- `src/tool/copilot.mjs` 从 `execFile("gh", ...)` 改为 `CopilotClient + session.sendAndWait(...)`。
+- 保留并兼容原有导出方法：
+  - `runCopilot`
+  - `runCopilotWithSession`
+  - `runCopilotWithSharedSession`
+- 共享会话模式下继续保留串行锁，避免并发复用会话时上下文竞争。
+- 新增 `stopCopilotClient`，用于进程退出时优雅释放 SDK 连接与会话。
+- `src/index.mjs` 在 shutdown 流程中调用 `stopCopilotClient`。
+- 新增依赖：`@github/copilot-sdk`。
+
+涉及文件：
+- src/tool/copilot.mjs
+- src/index.mjs
+- package.json
+- package-lock.json
+- README.md
+
+验证记录：
+- node --check src/tool/copilot.mjs
+- node --check src/index.mjs
+- node --check src/gateway/server.mjs
+- node --check src/bridge/feishu.mjs
+- node --input-type=module -e "import { CopilotClient } from '@github/copilot-sdk'; ..."
+- 结果：通过
+
+---
+
+### 13) 清理 Feishu /skill 与本地技能注入逻辑
+
+关联提交：`d9ef395`
+
+变更目标：
+- 删除飞书桥接层本地 `/skill` 文件管理与 prompt 注入逻辑，简化命令面。
+
+主要改动：
+- 删除 `/skill` 命令分支。
+- 删除 `skillDir` 相关配置项。
+- 清理帮助文案与相关调用参数。
+
+涉及文件：
+- src/bridge/feishu.mjs
+- src/config.mjs
+
+---
+
+### 14) 共享会话增加串行锁
+
+关联提交：`2cecd9e`
+
+变更目标：
+- `reuseSession=true` 时同一时刻仅允许一个 copilot 任务执行，减少并发冲突导致的失败。
+
+主要改动：
+- 在 `src/tool/copilot.mjs` 增加队列锁封装，复用会话调用串行化。
+
+---
+
+### 15) Copilot 输出缓冲上限调整
+
+关联提交：`2051ba3`
+
+变更目标：
+- 降低大输出场景下缓冲溢出概率。
+
+主要改动：
+- `maxBuffer` 从 8MB 调整为 64MB。
+
