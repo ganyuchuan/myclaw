@@ -15,6 +15,7 @@
     "node": ">=22"
   },
   "dependencies": {
+    "@github/copilot-sdk": "^0.2.1",
     "@larksuite/cli": "^1.0.5",
     "@larksuiteoapi/node-sdk": "^1.59.0",
     "croner": "^10.0.1",

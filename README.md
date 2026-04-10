@@ -11,7 +11,7 @@ This is a minimal Gateway-only MVP inspired by OpenClaw.
 - Generic LLM adapter with one unified entrypoint
 - Supports `responses` and `chat_completions` protocols
 - HTTP health endpoint at `/health`
-- `copilot` method: call `gh copilot` CLI in non-interactive mode
+- `copilot` method: call GitHub Copilot via `@github/copilot-sdk`
 - `cron.*` methods: 定时任务子系统（持久化 JSON、最近唤醒调度）
 
 ## Quick Start
@@ -134,7 +134,7 @@ curl http://127.0.0.1:18790/health
 - `FEISHU_FILE_MAX_BYTES`: max accepted file size in bytes (default `20971520`)
 - `FEISHU_FILE_MAX_TEXT_CHARS`: max chars kept when reading md/txt file content (default `20000`)
 - `COPILOT_ENABLED`: enable gh copilot tool (`true`/`false`, default `true`)
-- `COPILOT_TIMEOUT_MS`: timeout for gh copilot execution (default `120000`)
+- `COPILOT_TIMEOUT_MS`: timeout for Copilot SDK `sendAndWait` (default `120000`)
 - `COPILOT_MODEL`: model to use (empty = copilot default)
 - `COPILOT_ALLOW_ALL_TOOLS`: allow copilot to use all tools unattended (`true`/`false`, default `true`)
 - `COPILOT_WORK_DIR`: working directory for copilot (empty = process cwd)
@@ -243,12 +243,12 @@ Notes:
 
 ## Copilot Tool
 
-The `copilot` gateway method calls `gh copilot` CLI in non-interactive mode (`-p`, `-s`, `--yolo`).
+The `copilot` gateway method calls GitHub Copilot through `@github/copilot-sdk`.
 
 Prerequisites:
 
-- `gh` CLI installed and authenticated (`gh auth login`)
-- `gh copilot` extension available (auto-downloaded on first use)
+- GitHub account with Copilot access
+- Local Copilot auth available (for example through existing CLI login/session)
 
 Request:
 

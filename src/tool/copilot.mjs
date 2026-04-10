@@ -1,7 +1,10 @@
-import { execFile } from "node:child_process";
+import { CopilotClient, approveAll } from "@github/copilot-sdk";
 
 let sharedCopilotSessionId = "";
 let sharedSessionQueue = Promise.resolve();
+let sdkClient = null;
+let sdkClientCwd = "";
+let sharedSession = null;
 
 function withSharedSessionLock(task) {
   const run = sharedSessionQueue.then(task, task);
@@ -10,109 +13,79 @@ function withSharedSessionLock(task) {
   return run;
 }
 
-function buildCopilotArgs({ prompt, config, resumeSessionId, outputJson }) {
-  const args = ["copilot", "-p", prompt, "-s", "--no-ask-user"];
+function denyAllPermissions() {
+  return { kind: "denied-by-rules" };
+}
 
-  if (resumeSessionId) {
-    args.push(`--resume=${resumeSessionId}`);
-  }
-
-  if (config.allowAllTools) {
-    args.push("--yolo");
-  }
+function buildSessionConfig(config) {
+  const sessionConfig = {
+    onPermissionRequest: config.allowAllTools ? approveAll : denyAllPermissions,
+    workingDirectory: config.workDir || process.cwd(),
+  };
 
   if (config.model) {
-    args.push("--model", config.model);
+    sessionConfig.model = config.model;
   }
 
-  if (outputJson) {
-    args.push("--output-format", "json");
-  }
-
-  return args;
+  return sessionConfig;
 }
 
-function runGhCopilot({ args, config }) {
+async function ensureSdkClient(config) {
   const cwd = config.workDir || process.cwd();
-  const startedAt = Date.now();
 
+  if (sdkClient && sdkClientCwd === cwd) {
+    return sdkClient;
+  }
+
+  if (sdkClient) {
+    await stopCopilotClient();
+  }
+
+  sdkClient = new CopilotClient({
+    cwd,
+    autoStart: true,
+    useLoggedInUser: true,
+    logLevel: "info",
+  });
+  await sdkClient.start();
+  sdkClientCwd = cwd;
+  console.log(`[copilot-sdk] client started cwd=${cwd}`);
+  return sdkClient;
+}
+
+function normalizeOutput(event) {
+  return String(event?.data?.content ?? "").trim();
+}
+
+async function createOrResumeSession({ client, config, resumeSessionId = "" }) {
+  const sessionConfig = buildSessionConfig(config);
+
+  if (resumeSessionId) {
+    return client.resumeSession(resumeSessionId, sessionConfig);
+  }
+
+  return client.createSession(sessionConfig);
+}
+
+async function runSessionPrompt({ session, prompt, timeoutMs }) {
+  const startedAt = Date.now();
   console.log(
-    `[copilot] exec gh ${JSON.stringify(args)} cwd=${cwd} timeoutMs=${config.timeoutMs} maxBuffer=8388608`,
+    `[copilot-sdk] send prompt sessionId=${session.sessionId} timeoutMs=${timeoutMs}`,
   );
 
-  return new Promise((resolve, reject) => {
-    execFile(
-      "gh",
-      args,
-      {
-        timeout: config.timeoutMs,
-        maxBuffer: 64 * 1024 * 1024,
-        cwd,
-        env: { ...process.env },
-      },
-      (error, stdout, stderr) => {
-        const elapsedMs = Date.now() - startedAt;
-        if (error) {
-          const msg = stderr?.trim() || error.message;
-          console.error(
-            `[copilot] gh finished error elapsedMs=${elapsedMs} code=${error.code ?? "unknown"} signal=${error.signal ?? ""} message=${msg}`,
-          );
-          reject(new Error(`gh copilot failed: ${msg}`));
-          return;
-        }
-        console.log(`[copilot] gh finished ok elapsedMs=${elapsedMs} stdoutChars=${stdout.trim().length}`);
-        resolve(stdout.trim());
-      },
-    );
-  });
-}
+  const event = await session.sendAndWait({ prompt }, timeoutMs);
+  const output = normalizeOutput(event);
+  const elapsedMs = Date.now() - startedAt;
 
-function parseCopilotJsonOutput(raw) {
-  const lines = String(raw ?? "")
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
+  console.log(
+    `[copilot-sdk] done sessionId=${session.sessionId} elapsedMs=${elapsedMs} outputChars=${output.length}`,
+  );
 
-  let sessionId = "";
-  let output = "";
-
-  for (const line of lines) {
-    let event;
-    try {
-      event = JSON.parse(line);
-    } catch {
-      continue;
-    }
-
-    if (!sessionId && event?.type === "user.message" && typeof event?.parentId === "string") {
-      sessionId = event.parentId;
-    }
-
-    if (event?.type === "assistant.message" && typeof event?.data?.content === "string") {
-      output = event.data.content;
-    }
-  }
-
-  if (!output) {
-    for (const line of lines) {
-      let event;
-      try {
-        event = JSON.parse(line);
-      } catch {
-        continue;
-      }
-
-      if (event?.type === "assistant.message_delta" && typeof event?.data?.deltaContent === "string") {
-        output += event.data.deltaContent;
-      }
-    }
-  }
-
-  return { output: output.trim(), sessionId };
+  return { output, sessionId: session.sessionId };
 }
 
 /**
- * Run gh copilot CLI in non-interactive mode and return text output.
+ * Run copilot using SDK and return text output.
  *
  * @param {object} options
  * @param {string} options.prompt
@@ -121,18 +94,16 @@ function parseCopilotJsonOutput(raw) {
  * @returns {Promise<string>}
  */
 export async function runCopilot({ prompt, config, resumeSessionId = "" }) {
-  const args = buildCopilotArgs({
+  const { output } = await runCopilotWithSession({
     prompt,
     config,
     resumeSessionId,
-    outputJson: false,
   });
-
-  return runGhCopilot({ args, config });
+  return output;
 }
 
 /**
- * Run gh copilot and return both output and reusable sessionId.
+ * Run copilot using SDK and return both output and sessionId.
  *
  * @param {object} options
  * @param {string} options.prompt
@@ -141,15 +112,22 @@ export async function runCopilot({ prompt, config, resumeSessionId = "" }) {
  * @returns {Promise<{ output: string, sessionId: string }>}
  */
 export async function runCopilotWithSession({ prompt, config, resumeSessionId = "" }) {
-  const args = buildCopilotArgs({
-    prompt,
+  const client = await ensureSdkClient(config);
+  const session = await createOrResumeSession({
+    client,
     config,
     resumeSessionId,
-    outputJson: true,
   });
 
-  const raw = await runGhCopilot({ args, config });
-  return parseCopilotJsonOutput(raw);
+  try {
+    return await runSessionPrompt({
+      session,
+      prompt,
+      timeoutMs: config.timeoutMs,
+    });
+  } finally {
+    await session.disconnect().catch(() => {});
+  }
 }
 
 export function getSharedCopilotSessionId() {
@@ -158,14 +136,33 @@ export function getSharedCopilotSessionId() {
 
 export function setSharedCopilotSessionId(sessionId) {
   const normalized = String(sessionId ?? "").trim();
-  if (normalized) {
-    sharedCopilotSessionId = normalized;
-  }
+  sharedCopilotSessionId = normalized;
+  sharedSession = null;
 }
 
 export function resetSharedCopilotSessionId() {
   sharedCopilotSessionId = "";
   sharedSessionQueue = Promise.resolve();
+  if (sharedSession) {
+    void sharedSession.disconnect().catch(() => {});
+  }
+  sharedSession = null;
+}
+
+async function getOrCreateSharedSession(config) {
+  const client = await ensureSdkClient(config);
+
+  if (sharedSession) {
+    return sharedSession;
+  }
+
+  const sessionConfig = buildSessionConfig(config);
+  sharedSession = sharedCopilotSessionId
+    ? await client.resumeSession(sharedCopilotSessionId, sessionConfig)
+    : await client.createSession(sessionConfig);
+
+  sharedCopilotSessionId = sharedSession.sessionId;
+  return sharedSession;
 }
 
 /**
@@ -178,21 +175,49 @@ export function resetSharedCopilotSessionId() {
  */
 export async function runCopilotWithSharedSession({ prompt, config }) {
   if (!config?.reuseSession) {
-    const output = await runCopilot({ prompt, config });
-    return { output, sessionId: "" };
+    return runCopilotWithSession({
+      prompt,
+      config,
+    });
   }
 
   return withSharedSessionLock(async () => {
-    const { output, sessionId } = await runCopilotWithSession({
-      prompt,
-      config,
-      resumeSessionId: sharedCopilotSessionId,
-    });
-
-    if (sessionId) {
-      sharedCopilotSessionId = sessionId;
+    try {
+      const session = await getOrCreateSharedSession(config);
+      const result = await runSessionPrompt({
+        session,
+        prompt,
+        timeoutMs: config.timeoutMs,
+      });
+      sharedCopilotSessionId = result.sessionId;
+      return result;
+    } catch (error) {
+      if (sharedSession) {
+        await sharedSession.disconnect().catch(() => {});
+      }
+      sharedSession = null;
+      throw error;
     }
-
-    return { output, sessionId: sharedCopilotSessionId };
   });
+}
+
+export async function stopCopilotClient() {
+  if (sharedSession) {
+    await sharedSession.disconnect().catch(() => {});
+    sharedSession = null;
+  }
+
+  if (!sdkClient) {
+    return;
+  }
+
+  const errors = await sdkClient.stop().catch(() => []);
+  if (Array.isArray(errors) && errors.length > 0) {
+    console.warn(`[copilot-sdk] client stop returned ${errors.length} cleanup errors`);
+  }
+
+  sdkClient = null;
+  sdkClientCwd = "";
+  sharedCopilotSessionId = "";
+  sharedSessionQueue = Promise.resolve();
 }

@@ -2,7 +2,7 @@ import { config } from "./config.mjs";
 import { createGatewayServer } from "./gateway/server.mjs";
 import { createCronScheduler } from "./cron/scheduler.mjs";
 import * as Lark from "@larksuiteoapi/node-sdk";
-import { runCopilotWithSharedSession } from "./tool/copilot.mjs";
+import { runCopilotWithSharedSession, stopCopilotClient } from "./tool/copilot.mjs";
 import { createSyncClient } from "./sync/client.mjs";
 
 function normalizeFeishuDomain(domain) {
@@ -164,6 +164,7 @@ const shutdown = async () => {
     if (cronScheduler) {
       cronScheduler.stop();
     }
+    await stopCopilotClient();
     await server.close();
   } finally {
     process.exit(0);
