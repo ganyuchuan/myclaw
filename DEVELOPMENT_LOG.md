@@ -476,3 +476,25 @@
 - node --check src/bridge/feishu.mjs
 - 结果：通过
 
+---
+
+### 18) Copilot Session not found 自动恢复重试
+
+关联提交：本次提交（见 `git log`）
+
+变更目标：
+- 解决飞书触发 copilot 时偶发的 `Session not found` 导致请求失败问题，提升会话复用稳定性。
+
+主要改动：
+- `src/tool/copilot.mjs`
+  - 新增 `isSessionNotFoundError`，用于识别会话失效错误。
+  - `runCopilotWithSession` 增加一次性重试：
+    - 命中 `Session not found` 时清空 `resumeSessionId`，改为新建会话重试一次。
+  - `runCopilotWithSharedSession` 增加一次性重试：
+    - 命中 `Session not found` 时断开并清空 `sharedSession/sharedCopilotSessionId`，重建会话后重试一次。
+  - 仅对 `Session not found` 触发自愈，不吞掉其他错误。
+
+验证记录：
+- node --check src/tool/copilot.mjs
+- 结果：通过
+

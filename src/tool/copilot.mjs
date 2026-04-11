@@ -58,6 +58,11 @@ function normalizeOutput(event) {
   return String(event?.data?.content ?? "").trim();
 }
 
+function isSessionNotFoundError(error) {
+  const message = String(error?.message ?? error).toLowerCase();
+  return message.includes("session not found");
+}
+
 async function createOrResumeSession({ client, config, resumeSessionId = "" }) {
   const sessionConfig = buildSessionConfig(config);
 
@@ -143,22 +148,35 @@ export async function runCopilotWithSession({
   onDone,
 }) {
   const client = await ensureSdkClient(config);
-  const session = await createOrResumeSession({
-    client,
-    config,
-    resumeSessionId,
-  });
+  let effectiveResumeSessionId = resumeSessionId;
+  let retried = false;
 
-  try {
-    return await runSessionPrompt({
-      session,
-      prompt,
-      timeoutMs: config.timeoutMs,
-      onDelta,
-      onDone,
+  while (true) {
+    const session = await createOrResumeSession({
+      client,
+      config,
+      resumeSessionId: effectiveResumeSessionId,
     });
-  } finally {
-    await session.disconnect().catch(() => {});
+
+    try {
+      return await runSessionPrompt({
+        session,
+        prompt,
+        timeoutMs: config.timeoutMs,
+        onDelta,
+        onDone,
+      });
+    } catch (error) {
+      if (!retried && isSessionNotFoundError(error)) {
+        retried = true;
+        effectiveResumeSessionId = "";
+        console.warn("[copilot-sdk] session not found, retry once with a new session");
+      } else {
+        throw error;
+      }
+    } finally {
+      await session.disconnect().catch(() => {});
+    }
   }
 }
 
@@ -216,23 +234,35 @@ export async function runCopilotWithSharedSession({ prompt, config, onDelta, onD
   }
 
   return withSharedSessionLock(async () => {
-    try {
-      const session = await getOrCreateSharedSession(config);
-      const result = await runSessionPrompt({
-        session,
-        prompt,
-        timeoutMs: config.timeoutMs,
-        onDelta,
-        onDone,
-      });
-      sharedCopilotSessionId = result.sessionId;
-      return result;
-    } catch (error) {
-      if (sharedSession) {
-        await sharedSession.disconnect().catch(() => {});
+    let retried = false;
+
+    while (true) {
+      try {
+        const session = await getOrCreateSharedSession(config);
+        const result = await runSessionPrompt({
+          session,
+          prompt,
+          timeoutMs: config.timeoutMs,
+          onDelta,
+          onDone,
+        });
+        sharedCopilotSessionId = result.sessionId;
+        return result;
+      } catch (error) {
+        if (sharedSession) {
+          await sharedSession.disconnect().catch(() => {});
+        }
+        sharedSession = null;
+
+        if (!retried && isSessionNotFoundError(error)) {
+          retried = true;
+          sharedCopilotSessionId = "";
+          console.warn("[copilot-sdk] shared session not found, recreate and retry once");
+          continue;
+        }
+
+        throw error;
       }
-      sharedSession = null;
-      throw error;
     }
   });
 }
