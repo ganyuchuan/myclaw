@@ -480,7 +480,7 @@
 
 ### 18) Copilot Session not found 自动恢复重试
 
-关联提交：本次提交（见 `git log`）
+关联提交：`a6fe792`
 
 变更目标：
 - 解决飞书触发 copilot 时偶发的 `Session not found` 导致请求失败问题，提升会话复用稳定性。
