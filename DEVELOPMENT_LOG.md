@@ -547,7 +547,7 @@
 
 ### 20) 新增 Service Restart 工具（仅支持 restart）
 
-关联提交：本次提交（见 `git log`）
+关联提交：`7b8b01c`
 
 变更目标：
 - 支持通过 gateway 指令帧与飞书命令远程触发服务重启。
