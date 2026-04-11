@@ -502,7 +502,7 @@
 
 ### 19) 新增 Git 工具（Gateway 指令帧 + 飞书 /git）
 
-关联提交：本次提交（见 `git log`）
+关联提交：`d137ebf`
 
 变更目标：
 - 为 myclaw 增加基础 git 远程执行能力，支持通过 gateway `git` 方法和飞书 `/git` 命令在当前目录执行 allowlist 内的 git 指令。
