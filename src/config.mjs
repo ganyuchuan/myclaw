@@ -71,6 +71,14 @@ export const config = {
       "rev-parse",
     ]),
   },
+  service: {
+    enabled: toBool(process.env.SERVICE_ENABLED, false),
+    workDir: process.env.SERVICE_WORK_DIR?.trim() || "",
+    timeoutMs: toInt(process.env.SERVICE_TIMEOUT_MS, 30000),
+    pm2Bin: process.env.SERVICE_PM2_BIN?.trim() || "pm2",
+    pm2GatewayName: process.env.SERVICE_PM2_GATEWAY_NAME?.trim() || "myclaw-gateway",
+    pm2BridgeName: process.env.SERVICE_PM2_BRIDGE_NAME?.trim() || "myclaw-feishu",
+  },
   cron: {
     enabled: toBool(process.env.CRON_ENABLED, true),
     jobsFile: process.env.CRON_JOBS_FILE?.trim() || "data/cron-jobs.json",

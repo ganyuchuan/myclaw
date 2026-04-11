@@ -6,13 +6,14 @@ This is a minimal Gateway-only MVP inspired by OpenClaw.
 
 - WebSocket gateway at `/ws`
 - First-frame `connect` handshake with token auth
-- Minimal methods: `connect`, `health`, `send`, `agent`, `copilot`, `git`, `cron.*`
+- Minimal methods: `connect`, `health`, `send`, `agent`, `copilot`, `git`, `service.restart`, `cron.*`
 - In-memory sessions
 - Generic LLM adapter with one unified entrypoint
 - Supports `responses` and `chat_completions` protocols
 - HTTP health endpoint at `/health`
 - `copilot` method: call GitHub Copilot via `@github/copilot-sdk`
 - `git` method: run allowlisted git commands in the current working directory
+- `service.restart` method: restart PM2-managed gateway/bridge services
 - `cron.*` methods: 定时任务子系统（持久化 JSON、最近唤醒调度）
 
 ## Quick Start
@@ -178,6 +179,12 @@ curl http://127.0.0.1:18790/health
 - `GIT_WORK_DIR`: working directory for git tool (empty = process cwd)
 - `GIT_TIMEOUT_MS`: timeout for each git command in milliseconds (default `30000`)
 - `GIT_ALLOWED_COMMANDS`: comma-separated git subcommand allowlist
+- `SERVICE_ENABLED`: enable service restart tool (`true`/`false`, default `false`)
+- `SERVICE_WORK_DIR`: working directory for service tool (empty = process cwd)
+- `SERVICE_TIMEOUT_MS`: timeout for PM2 restart command (default `30000`)
+- `SERVICE_PM2_BIN`: PM2 executable name/path (default `pm2`)
+- `SERVICE_PM2_GATEWAY_NAME`: PM2 process name for gateway (default `myclaw-gateway`)
+- `SERVICE_PM2_BRIDGE_NAME`: PM2 process name for feishu bridge (default `myclaw-feishu`)
 - `CRON_ENABLED`: enable cron subsystem (`true`/`false`, default `true`)
 - `CRON_JOBS_FILE`: jobs persistence file path (default `data/cron-jobs.json`)
 - `CRON_JOB_TIMEOUT_MS`: per-job execution timeout (default `600000` = 10 min)
@@ -331,6 +338,67 @@ Response payload (example):
 }
 ```
 
+## Service Restart Tool (PM2)
+
+`service.restart` only supports restart and only supports targets `gateway|bridge|all`.
+
+Prerequisites:
+
+- PM2 installed and available in PATH (`pm2 -v`)
+- PM2 process names configured to match your actual runtime
+- If PM2 is only installed locally, set `SERVICE_PM2_BIN=./node_modules/.bin/pm2`
+
+Request:
+
+```json
+{
+  "type": "req",
+  "id": "6",
+  "method": "service.restart",
+  "params": { "target": "all" }
+}
+```
+
+Response payload (example):
+
+```json
+{
+  "ok": true,
+  "target": "all",
+  "serviceNames": ["myclaw-gateway", "myclaw-feishu"],
+  "output": "[myclaw-gateway] ...\n[myclaw-feishu] ..."
+}
+```
+
+### 1. 在本地使用 PM2 启动
+
+```bash
+cd /Users/yuchuan/Desktop/myclaw
+./node_modules/.bin/pm2 start npm --name myclaw-gateway -- run dev
+./node_modules/.bin/pm2 start npm --name myclaw-feishu -- run bridge:feishu
+./node_modules/.bin/pm2 ls
+```
+### 2. 测试远程重启
+
+- 网关帧：
+
+```json
+{
+  "type": "req",
+  "id": "svc-1",
+  "method": "service.restart",
+  "params": { "target": "all" }
+}
+```
+
+- 飞书：
+
+```bash
+/service restart gateway
+/service restart bridge
+/service restart all
+```
+
 ## Feishu × Copilot 交互
 
 Feishu bridge 通过 `config.copilot.enabled` 全局切换消息路由：
@@ -338,6 +406,7 @@ Feishu bridge 通过 `config.copilot.enabled` 全局切换消息路由：
 - `COPILOT_ENABLED=true`：所有飞书消息走 gateway `copilot` 方法（`gh copilot` CLI）
 - `COPILOT_ENABLED=false`：所有飞书消息走 `send` + `agent` 方法（LLM）
 - 飞书命令支持 `/git <args>`，通过 gateway `git` 方法在当前目录执行 allowlist 内 git 子命令
+- 飞书命令支持 `/service restart <gateway|bridge|all>`，通过 gateway `service.restart` 调用 PM2 执行重启
 
 交互流程：
 

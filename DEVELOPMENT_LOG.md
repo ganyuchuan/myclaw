@@ -543,3 +543,50 @@
 - node --input-type=module -e "import { runGitCommand } from './src/tool/git.mjs'; ..."
 - 结果：通过
 
+---
+
+### 20) 新增 Service Restart 工具（仅支持 restart）
+
+关联提交：本次提交（见 `git log`）
+
+变更目标：
+- 支持通过 gateway 指令帧与飞书命令远程触发服务重启。
+- 按约束仅提供 `restart` 能力，不开放其他 service 操作。
+
+主要改动：
+- `src/tool/service.mjs`
+  - 新增服务工具 `restartService`，仅支持目标：`gateway|bridge|all`。
+  - 通过 PM2 执行：`pm2 restart <name> --update-env`。
+  - 返回结构化结果：`ok/target/serviceNames/results/output`。
+- `src/gateway/server.mjs`
+  - 新增 gateway 方法：`service.restart`。
+  - `METHODS` 列表加入 `service.restart`。
+  - 执行失败返回 `TOOL_ERROR`。
+- `src/bridge/feishu.mjs`
+  - `/help` 新增 `/service restart <gateway|bridge|all>`。
+  - 新增 `/service` 命令路由，仅允许 `restart` 子命令并透传至 gateway。
+- `src/config.mjs`
+  - 新增配置组：`service`：
+    - `SERVICE_ENABLED`
+    - `SERVICE_WORK_DIR`
+    - `SERVICE_TIMEOUT_MS`
+    - `SERVICE_PM2_BIN`
+    - `SERVICE_PM2_GATEWAY_NAME`
+    - `SERVICE_PM2_BRIDGE_NAME`
+- `.env.example`
+  - 增加 `SERVICE_*` 示例配置。
+- `README.md`
+  - 更新方法列表与环境变量。
+  - 新增 Service Restart（PM2）使用说明、gateway 请求示例、飞书命令示例。
+  - 补充本地 PM2 二进制路径说明。
+- `package.json` / `package-lock.json`
+  - 增加 `pm2` 依赖，支持本地托管与重启调用。
+
+验证记录：
+- node --check src/tool/service.mjs
+- node --check src/gateway/server.mjs
+- node --check src/bridge/feishu.mjs
+- node --check src/config.mjs
+- node --input-type=module -e "import { restartService } from './src/tool/service.mjs'; ..."
+- 结果：通过（若 PM2 进程名未注册会返回 not found，属于运行态配置问题）
+

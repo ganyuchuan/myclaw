@@ -4,6 +4,7 @@ import { WebSocketServer } from "ws";
 import { generateAssistantReply } from "../model/client.mjs";
 import { runCopilotWithSharedSession } from "../tool/copilot.mjs";
 import { runGitCommand } from "../tool/git.mjs";
+import { restartService } from "../tool/service.mjs";
 import {
   isRequestFrame,
   makeError,
@@ -12,7 +13,7 @@ import {
   safeParseJson,
 } from "./protocol.mjs";
 
-const METHODS = ["connect", "send", "agent", "copilot", "git", "cron.list", "cron.add", "cron.update", "cron.remove", "cron.run", "health"];
+const METHODS = ["connect", "send", "agent", "copilot", "git", "service.restart", "cron.list", "cron.add", "cron.update", "cron.remove", "cron.run", "health"];
 
 export function createGatewayServer(config, { cronScheduler } = {}) {
   const sessions = new Map();
@@ -328,6 +329,41 @@ export function createGatewayServer(config, { cronScheduler } = {}) {
               }),
             ),
           );
+          return;
+        }
+
+        if (frame.method === "service.restart") {
+          if (!config.service?.enabled) {
+            socket.send(JSON.stringify(badRequest(frame.id, "service tool is disabled")));
+            return;
+          }
+
+          const target = String(frame.params?.target ?? "").trim().toLowerCase();
+          if (!target) {
+            socket.send(JSON.stringify(badRequest(frame.id, "service.restart target is required")));
+            return;
+          }
+
+          const result = await restartService({
+            target,
+            config: config.service,
+          });
+
+          if (!result.ok) {
+            socket.send(
+              JSON.stringify(
+                makeResponse(
+                  frame.id,
+                  false,
+                  result,
+                  makeError("TOOL_ERROR", result.output || "service restart failed"),
+                ),
+              ),
+            );
+            return;
+          }
+
+          socket.send(JSON.stringify(makeResponse(frame.id, true, result)));
           return;
         }
 

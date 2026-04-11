@@ -399,6 +399,7 @@ async function routeCommand({
   runCopilotRequest,
   copilotCfg,
   gitCfg,
+  serviceCfg,
   chatId,
   senderOpenId,
 }) {
@@ -414,6 +415,7 @@ async function routeCommand({
       "支持命令:",
       "/copilot <prompt>",
       "/git <args>",
+      "/service restart <gateway|bridge|all>",
       "/agent <text>",
       "/cron list",
       "/cron run <jobId>",
@@ -454,6 +456,23 @@ async function routeCommand({
     }
 
     const payload = await gatewayClient.request("git", { command: rest });
+    return String(payload?.output ?? "").trim() || "(empty output)";
+  }
+
+  if (cmd === "/service") {
+    if (!serviceCfg?.enabled) {
+      throw new Error("service tool is disabled");
+    }
+
+    const [actionRaw, targetRaw] = String(rest ?? "").split(/\s+/).filter(Boolean);
+    const action = String(actionRaw ?? "").toLowerCase();
+    const target = String(targetRaw ?? "").toLowerCase();
+
+    if (action !== "restart" || !target) {
+      throw new Error("usage: /service restart <gateway|bridge|all>");
+    }
+
+    const payload = await gatewayClient.request("service.restart", { target });
     return String(payload?.output ?? "").trim() || "(empty output)";
   }
 
@@ -571,6 +590,7 @@ assertConfig(feishuCfg);
 
 const copilotCfg = config.copilot;
 const gitCfg = config.git;
+const serviceCfg = config.service;
 
 const gatewayClient = createGatewayClient({
   gatewayUrl: feishuCfg.gatewayUrl,
@@ -732,6 +752,7 @@ dispatcher.register({
         runCopilotRequest,
         copilotCfg,
         gitCfg,
+        serviceCfg,
         chatId,
         senderOpenId,
       });
