@@ -18,6 +18,17 @@ const toBool = (value, fallback = false) => {
   return fallback;
 };
 
+const toList = (value, fallback = []) => {
+  const raw = String(value ?? "").trim();
+  if (!raw) {
+    return [...fallback];
+  }
+  return raw
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+};
+
 export const config = {
   port: toInt(process.env.PORT, 18789),
   gatewayToken: process.env.GATEWAY_TOKEN?.trim() || "dev-token",
@@ -36,6 +47,29 @@ export const config = {
     allowAllTools: toBool(process.env.COPILOT_ALLOW_ALL_TOOLS, true),
     workDir: process.env.COPILOT_WORK_DIR?.trim() || "",
     reuseSession: toBool(process.env.COPILOT_REUSE_SESSION, true),
+  },
+  git: {
+    enabled: toBool(process.env.GIT_ENABLED, true),
+    workDir: process.env.GIT_WORK_DIR?.trim() || "",
+    timeoutMs: toInt(process.env.GIT_TIMEOUT_MS, 30000),
+    allowedCommands: toList(process.env.GIT_ALLOWED_COMMANDS, [
+      "status",
+      "log",
+      "diff",
+      "add",
+      "commit",
+      "pull",
+      "push",
+      "fetch",
+      "branch",
+      "checkout",
+      "switch",
+      "restore",
+      "show",
+      "remote",
+      "tag",
+      "rev-parse",
+    ]),
   },
   cron: {
     enabled: toBool(process.env.CRON_ENABLED, true),

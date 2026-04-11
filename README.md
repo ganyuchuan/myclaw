@@ -6,12 +6,13 @@ This is a minimal Gateway-only MVP inspired by OpenClaw.
 
 - WebSocket gateway at `/ws`
 - First-frame `connect` handshake with token auth
-- Minimal methods: `connect`, `health`, `send`, `agent`, `copilot`, `cron.*`
+- Minimal methods: `connect`, `health`, `send`, `agent`, `copilot`, `git`, `cron.*`
 - In-memory sessions
 - Generic LLM adapter with one unified entrypoint
 - Supports `responses` and `chat_completions` protocols
 - HTTP health endpoint at `/health`
 - `copilot` method: call GitHub Copilot via `@github/copilot-sdk`
+- `git` method: run allowlisted git commands in the current working directory
 - `cron.*` methods: 定时任务子系统（持久化 JSON、最近唤醒调度）
 
 ## Quick Start
@@ -173,6 +174,10 @@ curl http://127.0.0.1:18790/health
 - `COPILOT_ALLOW_ALL_TOOLS`: allow copilot to use all tools unattended (`true`/`false`, default `true`)
 - `COPILOT_WORK_DIR`: working directory for copilot (empty = process cwd)
 - `COPILOT_REUSE_SESSION`: reuse one shared copilot session in gateway `copilot` method (`true`/`false`, default `true`)
+- `GIT_ENABLED`: enable git tool (`true`/`false`, default `true`)
+- `GIT_WORK_DIR`: working directory for git tool (empty = process cwd)
+- `GIT_TIMEOUT_MS`: timeout for each git command in milliseconds (default `30000`)
+- `GIT_ALLOWED_COMMANDS`: comma-separated git subcommand allowlist
 - `CRON_ENABLED`: enable cron subsystem (`true`/`false`, default `true`)
 - `CRON_JOBS_FILE`: jobs persistence file path (default `data/cron-jobs.json`)
 - `CRON_JOB_TIMEOUT_MS`: per-job execution timeout (default `600000` = 10 min)
@@ -301,12 +306,38 @@ Response payload:
 { "output": "git tag --sort=-creatordate" }
 ```
 
+## Git Tool
+
+The `git` gateway method runs allowlisted git commands in the configured working directory.
+
+Request:
+
+```json
+{
+  "type": "req",
+  "id": "5",
+  "method": "git",
+  "params": { "command": "status -sb" }
+}
+```
+
+Response payload (example):
+
+```json
+{
+  "ok": true,
+  "subcommand": "status",
+  "output": "## main...origin/main"
+}
+```
+
 ## Feishu × Copilot 交互
 
 Feishu bridge 通过 `config.copilot.enabled` 全局切换消息路由：
 
 - `COPILOT_ENABLED=true`：所有飞书消息走 gateway `copilot` 方法（`gh copilot` CLI）
 - `COPILOT_ENABLED=false`：所有飞书消息走 `send` + `agent` 方法（LLM）
+- 飞书命令支持 `/git <args>`，通过 gateway `git` 方法在当前目录执行 allowlist 内 git 子命令
 
 交互流程：
 

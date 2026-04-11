@@ -498,3 +498,48 @@
 - node --check src/tool/copilot.mjs
 - 结果：通过
 
+---
+
+### 19) 新增 Git 工具（Gateway 指令帧 + 飞书 /git）
+
+关联提交：本次提交（见 `git log`）
+
+变更目标：
+- 为 myclaw 增加基础 git 远程执行能力，支持通过 gateway `git` 方法和飞书 `/git` 命令在当前目录执行 allowlist 内的 git 指令。
+
+主要改动：
+- `src/tool/git.mjs`
+  - 新增 git 工具执行模块，基于 `execFile("git", args)` 非 shell 执行。
+  - 支持输入：
+    - `command` 字符串（内部解析为 args）
+    - `args` 数组
+  - 增加子命令 allowlist 校验与超时控制。
+  - 输出统一结构：`ok/subcommand/output/stdout/stderr/exitCode`。
+- `src/gateway/server.mjs`
+  - 新增 gateway 方法：`git`。
+  - `METHODS` 宣告加入 `git`，`hello.features.methods` 可见。
+  - 调用 git 工具执行后返回结构化结果；失败返回 `TOOL_ERROR`。
+- `src/bridge/feishu.mjs`
+  - `/help` 新增 `/git <args>`。
+  - 新增 `/git` 命令路由，透传到 gateway `git` 方法。
+- `src/config.mjs`
+  - 新增配置组：`git`：
+    - `GIT_ENABLED`
+    - `GIT_WORK_DIR`
+    - `GIT_TIMEOUT_MS`
+    - `GIT_ALLOWED_COMMANDS`
+- `.env.example`
+  - 增加 git 工具相关示例配置。
+- `README.md`
+  - 更新方法列表与环境变量说明。
+  - 增加 `git` gateway 指令帧示例。
+  - 增加飞书 `/git` 使用说明。
+
+验证记录：
+- node --check src/tool/git.mjs
+- node --check src/gateway/server.mjs
+- node --check src/bridge/feishu.mjs
+- node --check src/config.mjs
+- node --input-type=module -e "import { runGitCommand } from './src/tool/git.mjs'; ..."
+- 结果：通过
+

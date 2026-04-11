@@ -392,7 +392,16 @@ function withFeishuNotificationTarget(params, { chatId, senderOpenId }) {
   };
 }
 
-async function routeCommand({ text, sessionId, gatewayClient, runCopilotRequest, copilotCfg, chatId, senderOpenId }) {
+async function routeCommand({
+  text,
+  sessionId,
+  gatewayClient,
+  runCopilotRequest,
+  copilotCfg,
+  gitCfg,
+  chatId,
+  senderOpenId,
+}) {
   const command = splitCommandText(text);
   if (!command) {
     return null;
@@ -404,6 +413,7 @@ async function routeCommand({ text, sessionId, gatewayClient, runCopilotRequest,
     return [
       "支持命令:",
       "/copilot <prompt>",
+      "/git <args>",
       "/agent <text>",
       "/cron list",
       "/cron run <jobId>",
@@ -432,6 +442,19 @@ async function routeCommand({ text, sessionId, gatewayClient, runCopilotRequest,
     await gatewayClient.request("send", { sessionId, text: rest });
     const payload = await gatewayClient.request("agent", { sessionId });
     return String(payload?.reply ?? "").trim() || "(empty output)";
+  }
+
+  if (cmd === "/git") {
+    if (!gitCfg?.enabled) {
+      throw new Error("git tool is disabled");
+    }
+
+    if (!rest) {
+      throw new Error("usage: /git <args>");
+    }
+
+    const payload = await gatewayClient.request("git", { command: rest });
+    return String(payload?.output ?? "").trim() || "(empty output)";
   }
 
   if (cmd === "/cron") {
@@ -547,6 +570,7 @@ const feishuCfg = config.feishu;
 assertConfig(feishuCfg);
 
 const copilotCfg = config.copilot;
+const gitCfg = config.git;
 
 const gatewayClient = createGatewayClient({
   gatewayUrl: feishuCfg.gatewayUrl,
@@ -707,6 +731,7 @@ dispatcher.register({
         gatewayClient,
         runCopilotRequest,
         copilotCfg,
+        gitCfg,
         chatId,
         senderOpenId,
       });

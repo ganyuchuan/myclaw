@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { WebSocketServer } from "ws";
 import { generateAssistantReply } from "../model/client.mjs";
 import { runCopilotWithSharedSession } from "../tool/copilot.mjs";
+import { runGitCommand } from "../tool/git.mjs";
 import {
   isRequestFrame,
   makeError,
@@ -11,7 +12,7 @@ import {
   safeParseJson,
 } from "./protocol.mjs";
 
-const METHODS = ["connect", "send", "agent", "copilot", "cron.list", "cron.add", "cron.update", "cron.remove", "cron.run", "health"];
+const METHODS = ["connect", "send", "agent", "copilot", "git", "cron.list", "cron.add", "cron.update", "cron.remove", "cron.run", "health"];
 
 export function createGatewayServer(config, { cronScheduler } = {}) {
   const sessions = new Map();
@@ -282,6 +283,49 @@ export function createGatewayServer(config, { cronScheduler } = {}) {
           socket.send(
             JSON.stringify(
               makeResponse(frame.id, true, { output, sessionId: sessionId || undefined }),
+            ),
+          );
+          return;
+        }
+
+        if (frame.method === "git") {
+          if (!config.git?.enabled) {
+            socket.send(JSON.stringify(badRequest(frame.id, "git tool is disabled")));
+            return;
+          }
+
+          const command = String(frame.params?.command ?? "");
+          const args = Array.isArray(frame.params?.args) ? frame.params.args : undefined;
+
+          const result = await runGitCommand({
+            command,
+            args,
+            config: config.git,
+          });
+
+          if (!result.ok) {
+            socket.send(
+              JSON.stringify(
+                makeResponse(
+                  frame.id,
+                  false,
+                  {
+                    ...result,
+                    allowedCommands: config.git.allowedCommands,
+                  },
+                  makeError("TOOL_ERROR", result.error || result.output || "git command failed"),
+                ),
+              ),
+            );
+            return;
+          }
+
+          socket.send(
+            JSON.stringify(
+              makeResponse(frame.id, true, {
+                ...result,
+                allowedCommands: config.git.allowedCommands,
+              }),
             ),
           );
           return;
