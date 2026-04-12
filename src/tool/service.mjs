@@ -28,7 +28,7 @@ function resolveServiceNames(target, config) {
     return uniqueNonEmpty([bridgeName]);
   }
   if (target === "all") {
-    return uniqueNonEmpty([gatewayName, bridgeName]);
+    return uniqueNonEmpty([bridgeName, gatewayName]);
   }
 
   throw new Error("target must be one of: gateway, bridge, all");
