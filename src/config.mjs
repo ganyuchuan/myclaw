@@ -47,6 +47,7 @@ export const config = {
     allowAllTools: toBool(process.env.COPILOT_ALLOW_ALL_TOOLS, true),
     workDir: process.env.COPILOT_WORK_DIR?.trim() || "",
     reuseSession: toBool(process.env.COPILOT_REUSE_SESSION, true),
+    skillsFile: process.env.COPILOT_SKILLS_FILE?.trim() || "data/copilot-skills.json",
   },
   git: {
     enabled: toBool(process.env.GIT_ENABLED, true),

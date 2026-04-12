@@ -590,3 +590,54 @@
 - node --input-type=module -e "import { restartService } from './src/tool/service.mjs'; ..."
 - 结果：通过（若 PM2 进程名未注册会返回 not found，属于运行态配置问题）
 
+---
+
+## 2026-04-12
+
+### 21) 新增 Copilot Skills 管理（skills.list/add/remove）
+
+关联提交：本次提交
+
+变更目标：
+- 支持通过网关与飞书命令动态管理 Copilot SDK `skillDirectories`。
+- 在会话创建与恢复时自动加载已登记技能目录。
+
+主要改动：
+- `src/tool/skills.mjs`
+  - 新增技能目录持久化模块。
+  - 提供 `listSkills/addSkill/removeSkill/getSkillDirectoriesForSession`。
+  - 默认持久化文件：`data/copilot-skills.json`（原子写：tmp + rename）。
+- `src/tool/copilot.mjs`
+  - `createSession/resumeSession` 前动态读取 `skillDirectories`。
+  - 增加技能签名比对；当技能目录变化时重建共享 session。
+- `src/gateway/server.mjs`
+  - 新增网关方法：`skills.list`、`skills.add`、`skills.remove`。
+  - 在 add/remove 后重置共享 copilot session，确保后续请求加载新技能。
+- `src/bridge/feishu.mjs`
+  - 新增命令：`/skills list|add|remove`。
+  - `/help` 同步更新命令说明。
+- `src/config.mjs`
+  - 新增配置：`COPILOT_SKILLS_FILE`。
+- `README.md`
+  - 更新 methods、环境变量与 Skills Tool 使用说明。
+- `.gitignore`
+  - 新增 `skills/` 忽略规则。
+
+涉及文件：
+- .gitignore
+- README.md
+- src/bridge/feishu.mjs
+- src/config.mjs
+- src/gateway/server.mjs
+- src/tool/copilot.mjs
+- src/tool/skills.mjs
+
+验证记录：
+- node --check src/tool/skills.mjs
+- node --check src/tool/copilot.mjs
+- node --check src/gateway/server.mjs
+- node --check src/bridge/feishu.mjs
+- node --check src/config.mjs
+- node -e "import('./src/tool/skills.mjs').then(async (m)=>{...add/list/remove...})"
+- 结果：通过
+

@@ -2,9 +2,10 @@ import { createServer } from "node:http";
 import crypto from "node:crypto";
 import { WebSocketServer } from "ws";
 import { generateAssistantReply } from "../model/client.mjs";
-import { runCopilotWithSharedSession } from "../tool/copilot.mjs";
+import { resetSharedCopilotSessionId, runCopilotWithSharedSession } from "../tool/copilot.mjs";
 import { runGitCommand } from "../tool/git.mjs";
 import { restartService } from "../tool/service.mjs";
+import { addSkill, listSkills, removeSkill } from "../tool/skills.mjs";
 import {
   isRequestFrame,
   makeError,
@@ -13,7 +14,7 @@ import {
   safeParseJson,
 } from "./protocol.mjs";
 
-const METHODS = ["connect", "send", "agent", "copilot", "git", "service.restart", "cron.list", "cron.add", "cron.update", "cron.remove", "cron.run", "health"];
+const METHODS = ["connect", "send", "agent", "copilot", "git", "service.restart", "skills.list", "skills.add", "skills.remove", "cron.list", "cron.add", "cron.update", "cron.remove", "cron.run", "health"];
 
 export function createGatewayServer(config, { cronScheduler } = {}) {
   const sessions = new Map();
@@ -364,6 +365,49 @@ export function createGatewayServer(config, { cronScheduler } = {}) {
           }
 
           socket.send(JSON.stringify(makeResponse(frame.id, true, result)));
+          return;
+        }
+
+        if (frame.method === "skills.list") {
+          const payload = await listSkills({
+            workDir: config.copilot?.workDir || process.cwd(),
+            skillsFile: config.copilot?.skillsFile,
+          });
+          socket.send(JSON.stringify(makeResponse(frame.id, true, payload)));
+          return;
+        }
+
+        if (frame.method === "skills.add") {
+          const skillPath = String(frame.params?.path ?? frame.params?.skillPath ?? "").trim();
+          if (!skillPath) {
+            socket.send(JSON.stringify(badRequest(frame.id, "skills.add requires path")));
+            return;
+          }
+
+          const payload = await addSkill({
+            skillPath,
+            workDir: config.copilot?.workDir || process.cwd(),
+            skillsFile: config.copilot?.skillsFile,
+          });
+          resetSharedCopilotSessionId();
+          socket.send(JSON.stringify(makeResponse(frame.id, true, payload)));
+          return;
+        }
+
+        if (frame.method === "skills.remove") {
+          const skillPath = String(frame.params?.path ?? frame.params?.skillPath ?? "").trim();
+          if (!skillPath) {
+            socket.send(JSON.stringify(badRequest(frame.id, "skills.remove requires path")));
+            return;
+          }
+
+          const payload = await removeSkill({
+            skillPath,
+            workDir: config.copilot?.workDir || process.cwd(),
+            skillsFile: config.copilot?.skillsFile,
+          });
+          resetSharedCopilotSessionId();
+          socket.send(JSON.stringify(makeResponse(frame.id, true, payload)));
           return;
         }
 

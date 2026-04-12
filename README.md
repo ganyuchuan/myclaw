@@ -6,7 +6,7 @@ This is a minimal Gateway-only MVP inspired by OpenClaw.
 
 - WebSocket gateway at `/ws`
 - First-frame `connect` handshake with token auth
-- Minimal methods: `connect`, `health`, `send`, `agent`, `copilot`, `git`, `service.restart`, `cron.*`
+- Minimal methods: `connect`, `health`, `send`, `agent`, `copilot`, `git`, `service.restart`, `skills.*`, `cron.*`
 - In-memory sessions
 - Generic LLM adapter with one unified entrypoint
 - Supports `responses` and `chat_completions` protocols
@@ -14,6 +14,7 @@ This is a minimal Gateway-only MVP inspired by OpenClaw.
 - `copilot` method: call GitHub Copilot via `@github/copilot-sdk`
 - `git` method: run allowlisted git commands in the current working directory
 - `service.restart` method: restart PM2-managed gateway/bridge services
+- `skills.*` methods: Copilot Skills 目录管理（list/add/remove）
 - `cron.*` methods: 定时任务子系统（持久化 JSON、最近唤醒调度）
 
 ## Quick Start
@@ -175,6 +176,7 @@ curl http://127.0.0.1:18790/health
 - `COPILOT_ALLOW_ALL_TOOLS`: allow copilot to use all tools unattended (`true`/`false`, default `true`)
 - `COPILOT_WORK_DIR`: working directory for copilot (empty = process cwd)
 - `COPILOT_REUSE_SESSION`: reuse one shared copilot session in gateway `copilot` method (`true`/`false`, default `true`)
+- `COPILOT_SKILLS_FILE`: persistence file for added copilot skill directories (default `data/copilot-skills.json`)
 - `GIT_ENABLED`: enable git tool (`true`/`false`, default `true`)
 - `GIT_WORK_DIR`: working directory for git tool (empty = process cwd)
 - `GIT_TIMEOUT_MS`: timeout for each git command in milliseconds (default `30000`)
@@ -399,6 +401,46 @@ cd /Users/yuchuan/Desktop/myclaw
 /service restart all
 ```
 
+## Skills Tool (Copilot SDK)
+
+`skills.*` 用于管理 Copilot SDK 的 `skillDirectories`。
+
+- `skills.list`: 列出当前已添加的技能目录
+- `skills.add`: 添加一个技能目录路径（支持相对路径）
+- `skills.remove`: 删除一个已添加的技能目录路径
+
+请求示例：
+
+```json
+{
+  "type": "req",
+  "id": "7",
+  "method": "skills.add",
+  "params": { "path": "./skills/openclaw/skills/imap-smtp-email" }
+}
+```
+
+持久化说明：
+
+- 默认写入 `data/copilot-skills.json`
+- 修改技能列表后会重置共享 Copilot session，使后续 `createSession` / `resumeSession` 重新加载最新 `skillDirectories`
+
+你现在可以直接在飞书里这样用：
+
+```
+/skills list
+/skills add ./skills/skills/gzlicanyi/imap-smtp-email
+/skills remove ./skills/skills/gzlicanyi/imap-smtp-email
+```
+
+也可以通过网关发送：
+
+```json
+{ "type": "req", "id": "1", "method": "skills.list", "params": {} }
+{ "type": "req", "id": "2", "method": "skills.add", "params": { "path": "./skills/skills/gzlicanyi/imap-smtp-email" } }
+{ "type": "req", "id": "3", "method": "skills.remove", "params": { "path": "./skills/skills/gzlicanyi/imap-smtp-email" } }
+```
+
 ## Feishu × Copilot 交互
 
 Feishu bridge 通过 `config.copilot.enabled` 全局切换消息路由：
@@ -407,6 +449,7 @@ Feishu bridge 通过 `config.copilot.enabled` 全局切换消息路由：
 - `COPILOT_ENABLED=false`：所有飞书消息走 `send` + `agent` 方法（LLM）
 - 飞书命令支持 `/git <args>`，通过 gateway `git` 方法在当前目录执行 allowlist 内 git 子命令
 - 飞书命令支持 `/service restart <gateway|bridge|all>`，通过 gateway `service.restart` 调用 PM2 执行重启
+- 飞书命令支持 `/skills list|add|remove`，通过 gateway `skills.*` 管理 Copilot Skills 加载目录
 
 交互流程：
 

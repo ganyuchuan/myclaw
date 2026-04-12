@@ -416,6 +416,9 @@ async function routeCommand({
       "/copilot <prompt>",
       "/git <args>",
       "/service restart <gateway|bridge|all>",
+      "/skills list",
+      "/skills add <path>",
+      "/skills remove <path>",
       "/agent <text>",
       "/cron list",
       "/cron run <jobId>",
@@ -474,6 +477,55 @@ async function routeCommand({
 
     const payload = await gatewayClient.request("service.restart", { target });
     return String(payload?.output ?? "").trim() || "(empty output)";
+  }
+
+  if (cmd === "/skills") {
+    if (!rest) {
+      throw new Error("usage: /skills <list|add|remove> ...");
+    }
+
+    const [actionRaw, ...parts] = rest.split(/\s+/);
+    const action = String(actionRaw ?? "").toLowerCase();
+
+    if (action === "list") {
+      const payload = await gatewayClient.request("skills.list", {});
+      const skills = Array.isArray(payload?.skills) ? payload.skills : [];
+      if (skills.length === 0) {
+        return "(no skills added)";
+      }
+
+      return skills
+        .map((item, index) => {
+          const marker = item?.exists ? "" : " [missing]";
+          return `${index + 1}. ${String(item?.relativePath ?? item?.path ?? "")}${marker}`;
+        })
+        .join("\n");
+    }
+
+    if (action === "add") {
+      const skillPath = parts.join(" ").trim();
+      if (!skillPath) {
+        throw new Error("usage: /skills add <path>");
+      }
+      const payload = await gatewayClient.request("skills.add", { path: skillPath });
+      const relative = String(payload?.added?.relativePath ?? payload?.added?.path ?? skillPath);
+      return payload?.changed
+        ? `skill added: ${relative}`
+        : `skill already exists: ${relative}`;
+    }
+
+    if (action === "remove") {
+      const skillPath = parts.join(" ").trim();
+      if (!skillPath) {
+        throw new Error("usage: /skills remove <path>");
+      }
+      const payload = await gatewayClient.request("skills.remove", { path: skillPath });
+      return payload?.changed
+        ? `skill removed: ${skillPath}`
+        : `skill not found: ${skillPath}`;
+    }
+
+    throw new Error("usage: /skills <list|add|remove> ...");
   }
 
   if (cmd === "/cron") {

@@ -1,10 +1,12 @@
 import { CopilotClient, approveAll } from "@github/copilot-sdk";
+import { getSkillDirectoriesForSession } from "./skills.mjs";
 
 let sharedCopilotSessionId = "";
 let sharedSessionQueue = Promise.resolve();
 let sdkClient = null;
 let sdkClientCwd = "";
 let sharedSession = null;
+let sharedSkillSignature = "";
 
 function withSharedSessionLock(task) {
   const run = sharedSessionQueue.then(task, task);
@@ -17,11 +19,17 @@ function denyAllPermissions() {
   return { kind: "denied-by-rules" };
 }
 
-function buildSessionConfig(config) {
+async function buildSessionConfig(config) {
+  const skillDirectories = await getSkillDirectoriesForSession({
+    workDir: config.workDir || process.cwd(),
+    skillsFile: config.skillsFile,
+  });
+
   const sessionConfig = {
     onPermissionRequest: config.allowAllTools ? approveAll : denyAllPermissions,
     workingDirectory: config.workDir || process.cwd(),
     streaming: true,
+    skillDirectories,
   };
 
   if (config.model) {
@@ -29,6 +37,10 @@ function buildSessionConfig(config) {
   }
 
   return sessionConfig;
+}
+
+function makeSkillSignature(skillDirectories) {
+  return JSON.stringify(Array.isArray(skillDirectories) ? skillDirectories : []);
 }
 
 async function ensureSdkClient(config) {
@@ -64,7 +76,7 @@ function isSessionNotFoundError(error) {
 }
 
 async function createOrResumeSession({ client, config, resumeSessionId = "" }) {
-  const sessionConfig = buildSessionConfig(config);
+  const sessionConfig = await buildSessionConfig(config);
 
   if (resumeSessionId) {
     return client.resumeSession(resumeSessionId, sessionConfig);
@@ -91,10 +103,9 @@ async function runSessionPrompt({ session, prompt, timeoutMs, onDelta, onDone })
       })
     : null;
 
-  let output = "";
   try {
     const event = await session.sendAndWait({ prompt }, timeoutMs);
-    output = normalizeOutput(event) || streamedOutput.trim();
+    const output = normalizeOutput(event) || streamedOutput.trim();
     const elapsedMs = Date.now() - startedAt;
 
     console.log(
@@ -193,6 +204,7 @@ export function setSharedCopilotSessionId(sessionId) {
 export function resetSharedCopilotSessionId() {
   sharedCopilotSessionId = "";
   sharedSessionQueue = Promise.resolve();
+  sharedSkillSignature = "";
   if (sharedSession) {
     void sharedSession.disconnect().catch(() => {});
   }
@@ -201,17 +213,25 @@ export function resetSharedCopilotSessionId() {
 
 async function getOrCreateSharedSession(config) {
   const client = await ensureSdkClient(config);
+  const sessionConfig = await buildSessionConfig(config);
+  const nextSkillSignature = makeSkillSignature(sessionConfig.skillDirectories);
+
+  if (sharedSession && sharedSkillSignature !== nextSkillSignature) {
+    await sharedSession.disconnect().catch(() => {});
+    sharedSession = null;
+    sharedCopilotSessionId = "";
+  }
 
   if (sharedSession) {
     return sharedSession;
   }
 
-  const sessionConfig = buildSessionConfig(config);
   sharedSession = sharedCopilotSessionId
     ? await client.resumeSession(sharedCopilotSessionId, sessionConfig)
     : await client.createSession(sessionConfig);
 
   sharedCopilotSessionId = sharedSession.sessionId;
+  sharedSkillSignature = nextSkillSignature;
   return sharedSession;
 }
 
@@ -286,4 +306,5 @@ export async function stopCopilotClient() {
   sdkClientCwd = "";
   sharedCopilotSessionId = "";
   sharedSessionQueue = Promise.resolve();
+  sharedSkillSignature = "";
 }
