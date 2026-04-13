@@ -16,7 +16,11 @@ function resolveSkillsFile({ workDir, skillsFile }) {
 }
 
 function normalizePathInput(inputPath) {
-  return String(inputPath ?? "").trim();
+  return String(inputPath ?? "")
+    .replaceAll("\u200b", "")
+    .trim()
+    .replace(/^['"`]+|['"`]+$/g, "")
+    .trim();
 }
 
 function unique(items) {
@@ -65,11 +69,19 @@ async function writeState(filePath, state) {
 }
 
 async function toCanonicalDir(inputPath) {
-  const stat = await fs.stat(inputPath).catch(() => null);
-  if (!stat || !stat.isDirectory()) {
+  let stat;
+  try {
+    stat = await fs.stat(inputPath);
+  } catch (error) {
+    const reason = String(error?.code || error?.message || error);
+    throw new Error(`skills path is not accessible: ${inputPath} (${reason})`);
+  }
+
+  if (!stat.isDirectory()) {
     throw new Error(`skills path is not a directory: ${inputPath}`);
   }
-  return fs.realpath(inputPath);
+
+  return fs.realpath(inputPath).catch(() => path.resolve(inputPath));
 }
 
 function buildDetail(item, workDir) {
