@@ -641,3 +641,47 @@
 - node -e "import('./src/tool/skills.mjs').then(async (m)=>{...add/list/remove...})"
 - 结果：通过
 
+---
+
+## 2026-04-14
+
+### 22) Copilot Hooks 安全策略配置化（工具白名单 / 目录限制 / 破坏性操作询问）
+
+关联提交：本次提交（见 `git log`）
+
+变更目标：
+- 基于 Copilot SDK hooks，将会话权限策略改为 .env 可配置。
+- 实现三类策略：
+  - 安全工具白名单
+  - 指定目录访问限制
+  - 破坏性操作前询问
+
+主要改动：
+- `src/tool/copilot.mjs`
+  - 新增 hooks 构建逻辑（`onPreToolUse`）：
+    - 工具不在 `COPILOT_SAFE_TOOLS` 内则拒绝。
+    - 访问路径超出 `COPILOT_ALLOWED_DIRS` 则拒绝。
+    - 命中 `COPILOT_DESTRUCTIVE_TOOLS` 且启用询问策略时返回 `ask`。
+  - 新增 `resolvePermissionHandler`，支持 `COPILOT_PERMISSION_REQUEST_MODE`：
+    - `auto|approve|deny|delegate`。
+  - 会话配置中注入 `hooks` 与 `onPermissionRequest`。
+- `src/config.mjs`
+  - 新增 copilot 配置项：
+    - `COPILOT_HOOK_ENABLED`
+    - `COPILOT_SAFE_TOOLS`
+    - `COPILOT_RESTRICTED_DIR_TOOLS`
+    - `COPILOT_ALLOWED_DIRS`
+    - `COPILOT_ASK_BEFORE_DESTRUCTIVE`
+    - `COPILOT_DESTRUCTIVE_TOOLS`
+    - `COPILOT_PERMISSION_REQUEST_MODE`
+- `.env.example`
+  - 增加上述 hook 策略参数示例。
+- `README.md`
+  - 补充环境变量说明。
+  - 新增 Copilot Hook 安全策略配置示例与行为说明。
+
+验证记录：
+- node --check src/tool/copilot.mjs
+- node --check src/config.mjs
+- 结果：通过
+

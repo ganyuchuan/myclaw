@@ -176,6 +176,13 @@ curl http://127.0.0.1:18790/health
 - `COPILOT_ALLOW_ALL_TOOLS`: allow copilot to use all tools unattended (`true`/`false`, default `true`)
 - `COPILOT_WORK_DIR`: working directory for copilot (empty = process cwd)
 - `COPILOT_REUSE_SESSION`: reuse one shared copilot session in gateway `copilot` method (`true`/`false`, default `true`)
+- `COPILOT_HOOK_ENABLED`: enable Copilot SDK hook policy layer (`true`/`false`, default `true`)
+- `COPILOT_SAFE_TOOLS`: comma-separated tool allowlist enforced by hook (`onPreToolUse`)
+- `COPILOT_RESTRICTED_DIR_TOOLS`: tools that must pass directory scope checks
+- `COPILOT_ALLOWED_DIRS`: comma-separated allowed directories for file access checks (empty means no directory restriction)
+- `COPILOT_ASK_BEFORE_DESTRUCTIVE`: ask before destructive tool calls (`true`/`false`, default `true`)
+- `COPILOT_DESTRUCTIVE_TOOLS`: comma-separated destructive tool list used by ask policy
+- `COPILOT_PERMISSION_REQUEST_MODE`: `auto|approve|deny|delegate` (default `auto`); use `delegate` when you want SDK runtime ask flow
 - `COPILOT_SKILLS_FILE`: persistence file for added copilot skill directories (default `data/copilot-skills.json`)
 - `GIT_ENABLED`: enable git tool (`true`/`false`, default `true`)
 - `GIT_WORK_DIR`: working directory for git tool (empty = process cwd)
@@ -314,6 +321,63 @@ Response payload:
 ```json
 { "output": "git tag --sort=-creatordate" }
 ```
+
+### Copilot Hook 安全策略（基于 .env）
+
+Myclaw uses Copilot SDK hooks (`onPreToolUse`) to enforce a policy layer per session:
+
+- safe tool allowlist
+- allowed directory scope check
+- ask-before-destructive operations
+
+建议隔离配置示例：
+
+```dotenv
+COPILOT_WORK_DIR=/Users/you/sandbox/project-a
+COPILOT_HOOK_ENABLED=true
+COPILOT_SAFE_TOOLS=read_file,file_search,grep_search,list_dir,view_image,edit_file
+COPILOT_RESTRICTED_DIR_TOOLS=read_file,create_file,edit_file,delete_file,file_search,list_dir,view_image
+COPILOT_ALLOWED_DIRS=/Users/you/sandbox/project-a,/Users/you/sandbox/shared-readonly
+COPILOT_ASK_BEFORE_DESTRUCTIVE=true
+COPILOT_DESTRUCTIVE_TOOLS=delete_file,run_in_terminal,shell,bash
+COPILOT_PERMISSION_REQUEST_MODE=delegate
+```
+
+说明：
+
+- if a tool is not in `COPILOT_SAFE_TOOLS`, hook denies it
+- if a file path is outside `COPILOT_ALLOWED_DIRS`, hook denies it
+- if a tool is in `COPILOT_DESTRUCTIVE_TOOLS` and ask policy is enabled, hook returns `ask`
+- to make `ask` effective, prefer `COPILOT_PERMISSION_REQUEST_MODE=delegate` so permission decisions are delegated to SDK runtime
+
+重要说明
+
+- 如果你想让“询问”真正发生，建议把 COPILOT_PERMISSION_REQUEST_MODE 设为 delegate。
+- 如果设为 approve，ask 很可能会被自动放行。
+- 这套是应用层策略，不是操作系统级沙箱；要强隔离还需结合独立用户或容器。
+
+#### 区别 COPILOT_WORK_DIR 和 COPILOT_ALLOWED_DIRS
+
+两者作用层级不一样：
+
+1. `COPILOT_WORK_DIR`：会话“工作根目录”  
+  - 用途：告诉 Copilot SDK 当前会话默认在哪个目录下运行。  
+  - 在代码里会传给 `workingDirectory`，影响相对路径解析、会话上下文、以及你当前工程默认操作范围。  
+  - 参考实现： copilot.mjs, config.mjs
+
+2. `COPILOT_ALLOWED_DIRS`：Hook 的“访问白名单目录”  
+  - 用途：在 `onPreToolUse` 里做二次权限校验，工具访问路径不在这些目录内就拒绝。  
+  - 这是权限策略层，不是工作目录本身。  
+  - 为空时通常表示不启用目录限制。  
+  - 参考实现： copilot.mjs, README.md
+
+简单理解：
+- `COPILOT_WORK_DIR` = 默认从哪里开始工作  
+- `COPILOT_ALLOWED_DIRS` = 最终允许访问哪些目录
+
+最佳实践：
+- 让 `COPILOT_WORK_DIR` 落在 `COPILOT_ALLOWED_DIRS` 范围内。  
+- 例如把 `COPILOT_WORK_DIR` 设为项目 A，再把 `COPILOT_ALLOWED_DIRS` 设为“项目 A + 少量只读共享目录”。
 
 ## Git Tool
 

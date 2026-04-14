@@ -1,4 +1,5 @@
 import { CopilotClient, approveAll } from "@github/copilot-sdk";
+import path from "node:path";
 import { getSkillDirectoriesForSession } from "./skills.mjs";
 
 let sharedCopilotSessionId = "";
@@ -19,6 +20,169 @@ function denyAllPermissions() {
   return { kind: "denied-by-rules" };
 }
 
+function resolvePermissionHandler(config) {
+  const mode = String(config?.permissionRequestMode ?? "auto").trim().toLowerCase();
+
+  if (mode === "approve") {
+    return approveAll;
+  }
+
+  if (mode === "deny") {
+    return denyAllPermissions;
+  }
+
+  if (mode === "delegate") {
+    return undefined;
+  }
+
+  return config.allowAllTools ? approveAll : denyAllPermissions;
+}
+
+const DEFAULT_SAFE_TOOLS = [
+  "read_file",
+  "file_search",
+  "grep_search",
+  "list_dir",
+  "view_image",
+];
+
+const DEFAULT_RESTRICTED_DIR_TOOLS = [
+  "read_file",
+  "create_file",
+  "edit_file",
+  "delete_file",
+  "file_search",
+  "list_dir",
+  "view_image",
+];
+
+const DEFAULT_DESTRUCTIVE_TOOLS = [
+  "delete_file",
+  "edit_file",
+  "create_file",
+  "run_in_terminal",
+  "run_command",
+  "shell",
+  "bash",
+];
+
+function normalizeSet(values, fallback = []) {
+  const source = Array.isArray(values) && values.length > 0 ? values : fallback;
+  return new Set(source.map((item) => String(item ?? "").trim().toLowerCase()).filter(Boolean));
+}
+
+function isPathInsideAllowedDirs(filePath, allowedDirs) {
+  const normalizedPath = path.resolve(filePath);
+  return allowedDirs.some((dirPath) => {
+    const normalizedDir = path.resolve(dirPath);
+    return normalizedPath === normalizedDir || normalizedPath.startsWith(`${normalizedDir}${path.sep}`);
+  });
+}
+
+function collectPathCandidates(toolArgs) {
+  const candidates = [];
+  const seen = new Set();
+  const keys = new Set([
+    "path",
+    "filePath",
+    "targetPath",
+    "directory",
+    "dirPath",
+    "cwd",
+    "workingDirectory",
+    "source",
+    "destination",
+  ]);
+
+  const walk = (value) => {
+    if (!value) {
+      return;
+    }
+
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (!trimmed || seen.has(trimmed)) {
+        return;
+      }
+      seen.add(trimmed);
+      candidates.push(trimmed);
+      return;
+    }
+
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        walk(item);
+      }
+      return;
+    }
+
+    if (typeof value === "object") {
+      for (const [key, nested] of Object.entries(value)) {
+        if (keys.has(key)) {
+          walk(nested);
+        }
+      }
+    }
+  };
+
+  walk(toolArgs);
+  return candidates;
+}
+
+function buildCopilotHooks(config) {
+  if (!config?.hookEnabled) {
+    return undefined;
+  }
+
+  const workDir = path.resolve(config.workDir || process.cwd());
+  const safeTools = normalizeSet(config.safeTools, DEFAULT_SAFE_TOOLS);
+  const restrictedDirTools = normalizeSet(config.restrictedDirTools, DEFAULT_RESTRICTED_DIR_TOOLS);
+  const destructiveTools = normalizeSet(config.destructiveTools, DEFAULT_DESTRUCTIVE_TOOLS);
+  const allowedDirs = (Array.isArray(config.allowedDirs) ? config.allowedDirs : [])
+    .map((item) => String(item ?? "").trim())
+    .filter(Boolean)
+    .map((item) => path.resolve(path.isAbsolute(item) ? item : path.resolve(workDir, item)));
+
+  return {
+    onPreToolUse: async (input) => {
+      const toolName = String(input?.toolName ?? "").trim().toLowerCase();
+      if (!toolName) {
+        return null;
+      }
+
+      if (safeTools.size > 0 && !safeTools.has(toolName)) {
+        return {
+          permissionDecision: "deny",
+          permissionDecisionReason: `Tool \"${toolName}\" is not in COPILOT_SAFE_TOOLS`,
+        };
+      }
+
+      if (allowedDirs.length > 0 && restrictedDirTools.has(toolName)) {
+        const pathCandidates = collectPathCandidates(input?.toolArgs);
+        const blocked = pathCandidates.find((candidate) => {
+          const resolved = path.isAbsolute(candidate)
+            ? path.resolve(candidate)
+            : path.resolve(workDir, candidate);
+          return !isPathInsideAllowedDirs(resolved, allowedDirs);
+        });
+
+        if (blocked) {
+          return {
+            permissionDecision: "deny",
+            permissionDecisionReason: `Path \"${blocked}\" is outside COPILOT_ALLOWED_DIRS`,
+          };
+        }
+      }
+
+      if (config.askBeforeDestructive && destructiveTools.has(toolName)) {
+        return { permissionDecision: "ask" };
+      }
+
+      return { permissionDecision: "allow" };
+    },
+  };
+}
+
 async function buildSessionConfig(config) {
   const skillDirectories = await getSkillDirectoriesForSession({
     workDir: config.workDir || process.cwd(),
@@ -26,10 +190,11 @@ async function buildSessionConfig(config) {
   });
 
   const sessionConfig = {
-    onPermissionRequest: config.allowAllTools ? approveAll : denyAllPermissions,
+    onPermissionRequest: resolvePermissionHandler(config),
     workingDirectory: config.workDir || process.cwd(),
     streaming: true,
     skillDirectories,
+    hooks: buildCopilotHooks(config),
   };
 
   if (config.model) {

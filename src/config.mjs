@@ -48,6 +48,13 @@ export const config = {
     workDir: process.env.COPILOT_WORK_DIR?.trim() || "",
     reuseSession: toBool(process.env.COPILOT_REUSE_SESSION, true),
     skillsFile: process.env.COPILOT_SKILLS_FILE?.trim() || "data/copilot-skills.json",
+    hookEnabled: toBool(process.env.COPILOT_HOOK_ENABLED, true),
+    safeTools: toList(process.env.COPILOT_SAFE_TOOLS, []),
+    restrictedDirTools: toList(process.env.COPILOT_RESTRICTED_DIR_TOOLS, []),
+    allowedDirs: toList(process.env.COPILOT_ALLOWED_DIRS, []),
+    askBeforeDestructive: toBool(process.env.COPILOT_ASK_BEFORE_DESTRUCTIVE, true),
+    destructiveTools: toList(process.env.COPILOT_DESTRUCTIVE_TOOLS, []),
+    permissionRequestMode: process.env.COPILOT_PERMISSION_REQUEST_MODE?.trim().toLowerCase() || "auto",
   },
   git: {
     enabled: toBool(process.env.GIT_ENABLED, true),
