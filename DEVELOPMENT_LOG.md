@@ -689,7 +689,7 @@
 
 ### 23) Copilot Hooks 工具策略改为黑名单 + Skills 路径错误提示增强
 
-关联提交：本次提交（见 `git log`）
+关联提交：`cd21e13`
 
 变更目标：
 - 避免单一 `COPILOT_SAFE_TOOLS` 白名单误伤 MCP 业务工具调用（如腾讯会议技能）。
