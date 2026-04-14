@@ -49,7 +49,7 @@ export const config = {
     reuseSession: toBool(process.env.COPILOT_REUSE_SESSION, true),
     skillsFile: process.env.COPILOT_SKILLS_FILE?.trim() || "data/copilot-skills.json",
     hookEnabled: toBool(process.env.COPILOT_HOOK_ENABLED, true),
-    safeTools: toList(process.env.COPILOT_SAFE_TOOLS, []),
+    blockedTools: toList(process.env.COPILOT_BLOCKED_TOOLS, []),
     restrictedDirTools: toList(process.env.COPILOT_RESTRICTED_DIR_TOOLS, []),
     allowedDirs: toList(process.env.COPILOT_ALLOWED_DIRS, []),
     askBeforeDestructive: toBool(process.env.COPILOT_ASK_BEFORE_DESTRUCTIVE, true),

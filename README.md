@@ -177,7 +177,7 @@ curl http://127.0.0.1:18790/health
 - `COPILOT_WORK_DIR`: working directory for copilot (empty = process cwd)
 - `COPILOT_REUSE_SESSION`: reuse one shared copilot session in gateway `copilot` method (`true`/`false`, default `true`)
 - `COPILOT_HOOK_ENABLED`: enable Copilot SDK hook policy layer (`true`/`false`, default `true`)
-- `COPILOT_SAFE_TOOLS`: comma-separated tool allowlist enforced by hook (`onPreToolUse`)
+- `COPILOT_BLOCKED_TOOLS`: comma-separated tool denylist enforced by hook (`onPreToolUse`)
 - `COPILOT_RESTRICTED_DIR_TOOLS`: tools that must pass directory scope checks
 - `COPILOT_ALLOWED_DIRS`: comma-separated allowed directories for file access checks (empty means no directory restriction)
 - `COPILOT_ASK_BEFORE_DESTRUCTIVE`: ask before destructive tool calls (`true`/`false`, default `true`)
@@ -335,7 +335,7 @@ Myclaw uses Copilot SDK hooks (`onPreToolUse`) to enforce a policy layer per ses
 ```dotenv
 COPILOT_WORK_DIR=/Users/you/sandbox/project-a
 COPILOT_HOOK_ENABLED=true
-COPILOT_SAFE_TOOLS=read_file,file_search,grep_search,list_dir,view_image,edit_file
+COPILOT_BLOCKED_TOOLS=
 COPILOT_RESTRICTED_DIR_TOOLS=read_file,create_file,edit_file,delete_file,file_search,list_dir,view_image
 COPILOT_ALLOWED_DIRS=/Users/you/sandbox/project-a,/Users/you/sandbox/shared-readonly
 COPILOT_ASK_BEFORE_DESTRUCTIVE=true
@@ -345,7 +345,7 @@ COPILOT_PERMISSION_REQUEST_MODE=delegate
 
 说明：
 
-- if a tool is not in `COPILOT_SAFE_TOOLS`, hook denies it
+- if a tool is in `COPILOT_BLOCKED_TOOLS`, hook denies it
 - if a file path is outside `COPILOT_ALLOWED_DIRS`, hook denies it
 - if a tool is in `COPILOT_DESTRUCTIVE_TOOLS` and ask policy is enabled, hook returns `ask`
 - to make `ask` effective, prefer `COPILOT_PERMISSION_REQUEST_MODE=delegate` so permission decisions are delegated to SDK runtime

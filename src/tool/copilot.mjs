@@ -38,14 +38,6 @@ function resolvePermissionHandler(config) {
   return config.allowAllTools ? approveAll : denyAllPermissions;
 }
 
-const DEFAULT_SAFE_TOOLS = [
-  "read_file",
-  "file_search",
-  "grep_search",
-  "list_dir",
-  "view_image",
-];
-
 const DEFAULT_RESTRICTED_DIR_TOOLS = [
   "read_file",
   "create_file",
@@ -135,7 +127,7 @@ function buildCopilotHooks(config) {
   }
 
   const workDir = path.resolve(config.workDir || process.cwd());
-  const safeTools = normalizeSet(config.safeTools, DEFAULT_SAFE_TOOLS);
+  const blockedTools = normalizeSet(config.blockedTools, []);
   const restrictedDirTools = normalizeSet(config.restrictedDirTools, DEFAULT_RESTRICTED_DIR_TOOLS);
   const destructiveTools = normalizeSet(config.destructiveTools, DEFAULT_DESTRUCTIVE_TOOLS);
   const allowedDirs = (Array.isArray(config.allowedDirs) ? config.allowedDirs : [])
@@ -150,10 +142,10 @@ function buildCopilotHooks(config) {
         return null;
       }
 
-      if (safeTools.size > 0 && !safeTools.has(toolName)) {
+      if (blockedTools.has(toolName)) {
         return {
           permissionDecision: "deny",
-          permissionDecisionReason: `Tool \"${toolName}\" is not in COPILOT_SAFE_TOOLS`,
+          permissionDecisionReason: `Tool \"${toolName}\" is blocked by COPILOT_BLOCKED_TOOLS`,
         };
       }
 

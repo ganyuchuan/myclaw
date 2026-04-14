@@ -685,3 +685,33 @@
 - node --check src/config.mjs
 - 结果：通过
 
+---
+
+### 23) Copilot Hooks 工具策略改为黑名单 + Skills 路径错误提示增强
+
+关联提交：本次提交（见 `git log`）
+
+变更目标：
+- 避免单一 `COPILOT_SAFE_TOOLS` 白名单误伤 MCP 业务工具调用（如腾讯会议技能）。
+- 优化 `skills.add` 目录拼写错误时的可诊断性。
+
+主要改动：
+- `src/tool/copilot.mjs`
+  - 将工具策略从“白名单放行”改为“黑名单拦截”。
+  - 命中 `COPILOT_BLOCKED_TOOLS` 时拒绝，其余工具不再因不在白名单而被阻断。
+- `src/config.mjs`
+  - 配置项由 `COPILOT_SAFE_TOOLS` 调整为 `COPILOT_BLOCKED_TOOLS`。
+- `.env.example`
+  - 示例变量同步改为 `COPILOT_BLOCKED_TOOLS`。
+- `README.md`
+  - 环境变量与策略说明同步更新为黑名单语义。
+- `src/tool/skills.mjs`
+  - `skills path is not accessible` 报错增强：当 ENOENT 时，自动给出同级目录中最接近的候选名称（did you mean）。
+
+验证记录：
+- node --check src/tool/copilot.mjs
+- node --check src/config.mjs
+- node --check src/tool/skills.mjs
+- node --input-type=module -e "import { addSkill } from './src/tool/skills.mjs'; ..."
+- 结果：通过
+

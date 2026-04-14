@@ -37,6 +37,69 @@ function unique(items) {
   return result;
 }
 
+function levenshteinDistance(left, right) {
+  const a = String(left ?? "");
+  const b = String(right ?? "");
+
+  if (a === b) {
+    return 0;
+  }
+
+  if (!a) {
+    return b.length;
+  }
+
+  if (!b) {
+    return a.length;
+  }
+
+  const prev = Array.from({ length: b.length + 1 }, (_, index) => index);
+  const next = new Array(b.length + 1);
+
+  for (let i = 0; i < a.length; i += 1) {
+    next[0] = i + 1;
+    for (let j = 0; j < b.length; j += 1) {
+      const cost = a[i] === b[j] ? 0 : 1;
+      next[j + 1] = Math.min(
+        next[j] + 1,
+        prev[j + 1] + 1,
+        prev[j] + cost,
+      );
+    }
+
+    for (let j = 0; j <= b.length; j += 1) {
+      prev[j] = next[j];
+    }
+  }
+
+  return prev[b.length];
+}
+
+async function suggestSiblingDirectories(inputPath) {
+  const parentDir = path.dirname(inputPath);
+  const targetName = path.basename(inputPath).toLowerCase();
+
+  let entries;
+  try {
+    entries = await fs.readdir(parentDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  return entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => {
+      const name = String(entry.name ?? "");
+      return {
+        name,
+        score: levenshteinDistance(targetName, name.toLowerCase()),
+      };
+    })
+    .sort((left, right) => left.score - right.score || left.name.localeCompare(right.name))
+    .slice(0, 3)
+    .map((entry) => entry.name);
+}
+
 async function ensureDir(filePath) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
 }
@@ -74,7 +137,11 @@ async function toCanonicalDir(inputPath) {
     stat = await fs.stat(inputPath);
   } catch (error) {
     const reason = String(error?.code || error?.message || error);
-    throw new Error(`skills path is not accessible: ${inputPath} (${reason})`);
+    const suggestions = error?.code === "ENOENT" ? await suggestSiblingDirectories(inputPath) : [];
+    const suggestionText = suggestions.length > 0
+      ? `; did you mean: ${suggestions.join(", ")}`
+      : "";
+    throw new Error(`skills path is not accessible: ${inputPath} (${reason})${suggestionText}`);
   }
 
   if (!stat.isDirectory()) {
