@@ -596,7 +596,7 @@
 
 ### 21) 新增 Copilot Skills 管理（skills.list/add/remove）
 
-关联提交：本次提交
+关联提交：`e23b4bd`
 
 变更目标：
 - 支持通过网关与飞书命令动态管理 Copilot SDK `skillDirectories`。
