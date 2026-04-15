@@ -6,7 +6,7 @@ This is a minimal Gateway-only MVP inspired by OpenClaw.
 
 - WebSocket gateway at `/ws`
 - First-frame `connect` handshake with token auth
-- Minimal methods: `connect`, `health`, `send`, `agent`, `copilot`, `git`, `service.restart`, `skills.*`, `cron.*`
+- Minimal methods: `connect`, `health`, `send`, `agent`, `copilot`, `git`, `service.restart`, `skills.*`, `mcp.*`, `cron.*`
 - In-memory sessions
 - Generic LLM adapter with one unified entrypoint
 - Supports `responses` and `chat_completions` protocols
@@ -15,6 +15,7 @@ This is a minimal Gateway-only MVP inspired by OpenClaw.
 - `git` method: run allowlisted git commands in the current working directory
 - `service.restart` method: restart PM2-managed gateway/bridge services
 - `skills.*` methods: Copilot Skills 目录管理（list/add/remove）
+- `mcp.*` methods: MCP 服务配置管理（list/add/remove，持久化到 `config/mcporter.json`）
 - `cron.*` methods: 定时任务子系统（持久化 JSON、最近唤醒调度）
 
 ## Quick Start
@@ -176,6 +177,7 @@ curl http://127.0.0.1:18790/health
 - `COPILOT_ALLOW_ALL_TOOLS`: allow copilot to use all tools unattended (`true`/`false`, default `true`)
 - `COPILOT_WORK_DIR`: working directory for copilot (empty = process cwd)
 - `COPILOT_REUSE_SESSION`: reuse one shared copilot session in gateway `copilot` method (`true`/`false`, default `true`)
+- `COPILOT_MCP_CONFIG_FILE`: MCP server config file for Copilot SDK session (`config/mcporter.json` by default)
 - `COPILOT_HOOK_ENABLED`: enable Copilot SDK hook policy layer (`true`/`false`, default `true`)
 - `COPILOT_BLOCKED_TOOLS`: comma-separated tool denylist enforced by hook (`onPreToolUse`)
 - `COPILOT_RESTRICTED_DIR_TOOLS`: tools that must pass directory scope checks

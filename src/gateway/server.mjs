@@ -6,6 +6,7 @@ import { resetSharedCopilotSessionId, runCopilotWithSharedSession } from "../too
 import { runGitCommand } from "../tool/git.mjs";
 import { restartService } from "../tool/service.mjs";
 import { addSkill, listSkills, removeSkill } from "../tool/skills.mjs";
+import { listMcpServers, removeMcpServer, upsertMcpServers } from "../tool/mcp.mjs";
 import {
   isRequestFrame,
   makeError,
@@ -14,7 +15,7 @@ import {
   safeParseJson,
 } from "./protocol.mjs";
 
-const METHODS = ["connect", "send", "agent", "copilot", "git", "service.restart", "skills.list", "skills.add", "skills.remove", "cron.list", "cron.add", "cron.update", "cron.remove", "cron.run", "health"];
+const METHODS = ["connect", "send", "agent", "copilot", "git", "service.restart", "skills.list", "skills.add", "skills.remove", "mcp.list", "mcp.add", "mcp.remove", "cron.list", "cron.add", "cron.update", "cron.remove", "cron.run", "health"];
 
 export function createGatewayServer(config, { cronScheduler } = {}) {
   const sessions = new Map();
@@ -405,6 +406,49 @@ export function createGatewayServer(config, { cronScheduler } = {}) {
             skillPath,
             workDir: config.copilot?.workDir || process.cwd(),
             skillsFile: config.copilot?.skillsFile,
+          });
+          resetSharedCopilotSessionId();
+          socket.send(JSON.stringify(makeResponse(frame.id, true, payload)));
+          return;
+        }
+
+        if (frame.method === "mcp.list") {
+          const payload = await listMcpServers({
+            workDir: config.copilot?.workDir || process.cwd(),
+            mcpConfigFile: config.copilot?.mcpConfigFile,
+          });
+          socket.send(JSON.stringify(makeResponse(frame.id, true, payload)));
+          return;
+        }
+
+        if (frame.method === "mcp.add") {
+          const configInput = frame.params?.jsonConfig ?? frame.params?.config ?? frame.params;
+          if (!configInput || (typeof configInput === "string" && !configInput.trim())) {
+            socket.send(JSON.stringify(badRequest(frame.id, "mcp.add requires jsonConfig")));
+            return;
+          }
+
+          const payload = await upsertMcpServers({
+            configInput,
+            workDir: config.copilot?.workDir || process.cwd(),
+            mcpConfigFile: config.copilot?.mcpConfigFile,
+          });
+          resetSharedCopilotSessionId();
+          socket.send(JSON.stringify(makeResponse(frame.id, true, payload)));
+          return;
+        }
+
+        if (frame.method === "mcp.remove") {
+          const name = String(frame.params?.name ?? frame.params?.mcpName ?? "").trim();
+          if (!name) {
+            socket.send(JSON.stringify(badRequest(frame.id, "mcp.remove requires name")));
+            return;
+          }
+
+          const payload = await removeMcpServer({
+            name,
+            workDir: config.copilot?.workDir || process.cwd(),
+            mcpConfigFile: config.copilot?.mcpConfigFile,
           });
           resetSharedCopilotSessionId();
           socket.send(JSON.stringify(makeResponse(frame.id, true, payload)));

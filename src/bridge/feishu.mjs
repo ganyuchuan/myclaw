@@ -419,6 +419,9 @@ async function routeCommand({
       "/skills list",
       "/skills add <path>",
       "/skills remove <path>",
+      "/mcp list",
+      "/mcp add <mcp_config>",
+      "/mcp remove <mcp_name>",
       "/agent <text>",
       "/cron list",
       "/cron run <jobId>",
@@ -526,6 +529,54 @@ async function routeCommand({
     }
 
     throw new Error("usage: /skills <list|add|remove> ...");
+  }
+
+  if (cmd === "/mcp") {
+    if (!rest) {
+      throw new Error("usage: /mcp <add|remove|list> ...");
+    }
+
+    const [actionRaw, ...parts] = rest.split(/\s+/);
+    const action = String(actionRaw ?? "").toLowerCase();
+
+    if (action === "list") {
+      const payload = await gatewayClient.request("mcp.list", {});
+      return JSON.stringify(payload?.mcpServers ?? {}, null, 2);
+    }
+
+    if (action === "add") {
+      const configText = rest.slice("add".length).trim();
+      if (!configText) {
+        throw new Error("usage: /mcp add <mcp_config>");
+      }
+
+      const payload = await gatewayClient.request("mcp.add", { jsonConfig: configText });
+      const names = Array.isArray(payload?.names) ? payload.names : [];
+      const changedNames = Array.isArray(payload?.changedNames) ? payload.changedNames : [];
+      return [
+        `mcp config file: ${String(payload?.filePath ?? "")}`,
+        `servers in request: ${names.join(", ") || "(none)"}`,
+        `updated servers: ${changedNames.join(", ") || "(no changes)"}`,
+        `total servers: ${String(payload?.count ?? 0)}`,
+      ].join("\n");
+    }
+
+    if (action === "remove") {
+      const mcpName = parts.join(" ").trim();
+      if (!mcpName) {
+        throw new Error("usage: /mcp remove <mcp_name>");
+      }
+
+      const payload = await gatewayClient.request("mcp.remove", { name: mcpName });
+      return [
+        `mcp config file: ${String(payload?.filePath ?? "")}`,
+        `removed: ${payload?.removed ? "yes" : "no"}`,
+        `server: ${String(payload?.name ?? mcpName)}`,
+        `total servers: ${String(payload?.count ?? 0)}`,
+      ].join("\n");
+    }
+
+    throw new Error("usage: /mcp <add|remove|list> ...");
   }
 
   if (cmd === "/cron") {

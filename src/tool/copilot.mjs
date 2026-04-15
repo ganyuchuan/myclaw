@@ -1,6 +1,7 @@
 import { CopilotClient, approveAll } from "@github/copilot-sdk";
 import path from "node:path";
 import { getSkillDirectoriesForSession } from "./skills.mjs";
+import { loadMcpServersForCopilot } from "./mcp.mjs";
 
 let sharedCopilotSessionId = "";
 let sharedSessionQueue = Promise.resolve();
@@ -180,12 +181,17 @@ async function buildSessionConfig(config) {
     workDir: config.workDir || process.cwd(),
     skillsFile: config.skillsFile,
   });
+  const { mcpServers } = await loadMcpServersForCopilot({
+    workDir: config.workDir || process.cwd(),
+    mcpConfigFile: config.mcpConfigFile,
+  });
 
   const sessionConfig = {
     onPermissionRequest: resolvePermissionHandler(config),
     workingDirectory: config.workDir || process.cwd(),
     streaming: true,
     skillDirectories,
+    mcpServers,
     hooks: buildCopilotHooks(config),
   };
 
@@ -196,8 +202,11 @@ async function buildSessionConfig(config) {
   return sessionConfig;
 }
 
-function makeSkillSignature(skillDirectories) {
-  return JSON.stringify(Array.isArray(skillDirectories) ? skillDirectories : []);
+function makeSessionSignature({ skillDirectories, mcpServers }) {
+  return JSON.stringify({
+    skillDirectories: Array.isArray(skillDirectories) ? skillDirectories : [],
+    mcpServers: mcpServers && typeof mcpServers === "object" ? mcpServers : {},
+  });
 }
 
 async function ensureSdkClient(config) {
@@ -371,7 +380,10 @@ export function resetSharedCopilotSessionId() {
 async function getOrCreateSharedSession(config) {
   const client = await ensureSdkClient(config);
   const sessionConfig = await buildSessionConfig(config);
-  const nextSkillSignature = makeSkillSignature(sessionConfig.skillDirectories);
+  const nextSkillSignature = makeSessionSignature({
+    skillDirectories: sessionConfig.skillDirectories,
+    mcpServers: sessionConfig.mcpServers,
+  });
 
   if (sharedSession && sharedSkillSignature !== nextSkillSignature) {
     await sharedSession.disconnect().catch(() => {});

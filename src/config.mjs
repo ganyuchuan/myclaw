@@ -48,6 +48,7 @@ export const config = {
     workDir: process.env.COPILOT_WORK_DIR?.trim() || "",
     reuseSession: toBool(process.env.COPILOT_REUSE_SESSION, true),
     skillsFile: process.env.COPILOT_SKILLS_FILE?.trim() || "data/copilot-skills.json",
+    mcpConfigFile: process.env.COPILOT_MCP_CONFIG_FILE?.trim() || "config/mcporter.json",
     hookEnabled: toBool(process.env.COPILOT_HOOK_ENABLED, true),
     blockedTools: toList(process.env.COPILOT_BLOCKED_TOOLS, []),
     restrictedDirTools: toList(process.env.COPILOT_RESTRICTED_DIR_TOOLS, []),

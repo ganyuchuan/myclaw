@@ -715,3 +715,58 @@
 - node --input-type=module -e "import { addSkill } from './src/tool/skills.mjs'; ..."
 - 结果：通过
 
+---
+
+## 2026-04-15
+
+### 24) MCP 服务配置接入 Copilot SDK，并改造飞书 /mcp add|remove 命令
+
+关联提交：本次提交
+
+变更目标：
+- 支持通过网关与飞书命令动态管理 MCP 服务配置。
+- 将 `config/mcporter.json` 中的 `mcpServers` 自动注入 Copilot SDK session。
+- 将飞书命令从 `/mcp <json_config>` 收敛为显式子命令：`/mcp add <mcp_config>`、`/mcp remove <mcp_name>`。
+
+主要改动：
+- `src/tool/mcp.mjs`
+  - 新增 MCP 配置管理模块。
+  - 提供 `listMcpServers/upsertMcpServers/removeMcpServer`。
+  - 支持标准格式：`{"mcpServers": {"name": {...}}}`。
+  - 兼容 `baseUrl -> url` 归一化，并自动推断部分 `type`。
+- `src/tool/copilot.mjs`
+  - 在 `createSession/resumeSession` 前加载 `config/mcporter.json` 的 `mcpServers`。
+  - 将 `mcpServers` 注入 Copilot SDK session 配置。
+  - 共享会话签名增加 `mcpServers`，配置变化后自动重建 session。
+- `src/gateway/server.mjs`
+  - 新增网关方法：`mcp.list`、`mcp.add`、`mcp.remove`。
+  - 在 add/remove 后重置共享 copilot session，确保后续请求加载最新 MCP 配置。
+- `src/bridge/feishu.mjs`
+  - 新增命令：`/mcp list`、`/mcp add <mcp_config>`、`/mcp remove <mcp_name>`。
+  - 移除旧的 `/mcp <json_config>` 入口。
+- `src/config.mjs`
+  - 新增配置：`COPILOT_MCP_CONFIG_FILE`。
+- `.env.example`
+  - 增加 `COPILOT_MCP_CONFIG_FILE=config/mcporter.json` 示例。
+- `README.md`
+  - 更新 methods、环境变量与 MCP 配置说明。
+
+涉及文件：
+- .env.example
+- README.md
+- src/bridge/feishu.mjs
+- src/config.mjs
+- src/gateway/server.mjs
+- src/tool/copilot.mjs
+- src/tool/mcp.mjs
+
+验证记录：
+- node --check src/tool/mcp.mjs
+- node --check src/tool/copilot.mjs
+- node --check src/gateway/server.mjs
+- node --check src/bridge/feishu.mjs
+- node --check src/config.mjs
+- node -e "import('./src/tool/mcp.mjs').then(async (m)=>{...list current mcporter...})"
+- node -e "import('./src/tool/mcp.mjs').then(async (m)=>{...upsert/list/remove temp mcporter...})"
+- 结果：通过
+
