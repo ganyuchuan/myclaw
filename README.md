@@ -6,13 +6,14 @@ This is a minimal Gateway-only MVP inspired by OpenClaw.
 
 - WebSocket gateway at `/ws`
 - First-frame `connect` handshake with token auth
-- Minimal methods: `connect`, `health`, `send`, `agent`, `copilot`, `git`, `service.restart`, `skills.*`, `mcp.*`, `cron.*`
+- Minimal methods: `connect`, `health`, `send`, `agent`, `copilot`, `git`, `sql`, `service.restart`, `skills.*`, `mcp.*`, `cron.*`
 - In-memory sessions
 - Generic LLM adapter with one unified entrypoint
 - Supports `responses` and `chat_completions` protocols
 - HTTP health endpoint at `/health`
 - `copilot` method: call GitHub Copilot via `@github/copilot-sdk`
 - `git` method: run allowlisted git commands in the current working directory
+- `sql` method: use Copilot to translate NL to SQL and execute via local `sqlite3`
 - `service.restart` method: restart PM2-managed gateway/bridge services
 - `skills.*` methods: Copilot Skills 目录管理（list/add/remove）
 - `mcp.*` methods: MCP 服务配置管理（list/add/remove，持久化到 `config/mcporter.json`）
@@ -190,6 +191,11 @@ curl http://127.0.0.1:18790/health
 - `GIT_WORK_DIR`: working directory for git tool (empty = process cwd)
 - `GIT_TIMEOUT_MS`: timeout for each git command in milliseconds (default `30000`)
 - `GIT_ALLOWED_COMMANDS`: comma-separated git subcommand allowlist
+- `SQL_ENABLED`: enable sql tool (`true`/`false`, default `true`)
+- `SQL_WORK_DIR`: working directory for sql tool (empty = `COPILOT_WORK_DIR` or process cwd)
+- `SQL_DB_FILE`: sqlite database file path (default `data/myclaw.db`)
+- `SQL_TIMEOUT_MS`: timeout for each sqlite query in milliseconds (default `30000`)
+- `SQL_SCHEMA_HINT`: optional schema hint text for Copilot NL->SQL translation
 - `SERVICE_ENABLED`: enable service restart tool (`true`/`false`, default `false`)
 - `SERVICE_WORK_DIR`: working directory for service tool (empty = process cwd)
 - `SERVICE_TIMEOUT_MS`: timeout for PM2 restart command (default `30000`)
@@ -396,6 +402,41 @@ Request:
 }
 ```
 
+## SQL Tool (Copilot + sqlite3)
+
+The `sql` gateway method translates natural language to SQL with Copilot, then executes the SQL using local `sqlite3`.
+
+Prerequisites:
+
+- local `sqlite3` installed and in PATH (`sqlite3 --version`)
+- `COPILOT_ENABLED=true`
+- `SQL_DB_FILE` points to a valid sqlite database file
+
+Request:
+
+```json
+{
+  "type": "req",
+  "id": "5",
+  "method": "sql",
+  "params": { "text": "查询 users 表里最近 10 条注册记录" }
+}
+```
+
+Response payload (example):
+
+```json
+{
+  "ok": true,
+  "sql": "SELECT id, email, created_at FROM users ORDER BY created_at DESC LIMIT 10",
+  "rowCount": 2,
+  "rows": [
+    { "id": 1, "email": "a@example.com", "created_at": "2026-04-17 10:00:00" },
+    { "id": 2, "email": "b@example.com", "created_at": "2026-04-17 09:30:00" }
+  ]
+}
+```
+
 Response payload (example):
 
 ```json
@@ -513,6 +554,7 @@ Feishu bridge 通过 `config.copilot.enabled` 全局切换消息路由：
 
 - `COPILOT_ENABLED=true`：所有飞书消息走 gateway `copilot` 方法（`gh copilot` CLI）
 - `COPILOT_ENABLED=false`：所有飞书消息走 `send` + `agent` 方法（LLM）
+- 飞书命令支持 `/sql <自然语言查询>`，通过 gateway `sql` 方法调用 Copilot 翻译 SQL 并执行本地 sqlite3
 - 飞书命令支持 `/git <args>`，通过 gateway `git` 方法在当前目录执行 allowlist 内 git 子命令
 - 飞书命令支持 `/service restart <gateway|bridge|all>`，通过 gateway `service.restart` 调用 PM2 执行重启
 - 飞书命令支持 `/skills list|add|remove`，通过 gateway `skills.*` 管理 Copilot Skills 加载目录

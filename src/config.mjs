@@ -80,6 +80,13 @@ export const config = {
       "rev-parse",
     ]),
   },
+  sql: {
+    enabled: toBool(process.env.SQL_ENABLED, true),
+    workDir: process.env.SQL_WORK_DIR?.trim() || "",
+    dbFile: process.env.SQL_DB_FILE?.trim() || "data/myclaw.db",
+    timeoutMs: toInt(process.env.SQL_TIMEOUT_MS, 30000),
+    schemaHint: process.env.SQL_SCHEMA_HINT?.trim() || "",
+  },
   service: {
     enabled: toBool(process.env.SERVICE_ENABLED, false),
     workDir: process.env.SERVICE_WORK_DIR?.trim() || "",

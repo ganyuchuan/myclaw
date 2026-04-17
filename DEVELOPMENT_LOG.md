@@ -770,3 +770,48 @@
 - node -e "import('./src/tool/mcp.mjs').then(async (m)=>{...upsert/list/remove temp mcporter...})"
 - 结果：通过
 
+---
+
+## 2026-04-17
+
+### 25) 新增 SQL 能力（Gateway `sql` + 飞书 `/sql`）并切换为 Copilot 执行
+
+关联提交：待提交
+
+变更目标：
+- 支持通过网关 `sql` 方法和飞书 `/sql` 命令处理自然语言 SQL 请求。
+- 将 SQL 执行责任下沉到 Copilot（由 Copilot 调用本地工具执行并回传结果），网关侧负责转发与回传。
+
+主要改动：
+- `src/tool/sql.mjs`
+  - 新增 SQL 请求处理模块。
+  - `buildSqlGenerationPrompt` 负责构建“翻译 + 执行 + 返回结果”的任务指令。
+  - `runSqlRequest` 改为直接调用 `runCopilotWithSharedSession` 并返回 Copilot 输出。
+- `src/gateway/server.mjs`
+  - `METHODS` 增加 `sql`。
+  - 新增 `sql` 方法分发逻辑，参数支持 `text/prompt`。
+- `src/bridge/feishu.mjs`
+  - `/help` 增加 `/sql <自然语言查询>`。
+  - 新增 `/sql` 命令路由并透传到网关 `sql`。
+- `src/config.mjs`
+  - 新增 `sql` 配置组：`SQL_ENABLED/SQL_WORK_DIR/SQL_DB_FILE/SQL_TIMEOUT_MS/SQL_SCHEMA_HINT`。
+- `.env.example`
+  - 增加 `SQL_*` 示例配置。
+- `README.md`
+  - 更新 methods、环境变量与 SQL Tool 使用说明。
+
+涉及文件：
+- src/tool/sql.mjs
+- src/gateway/server.mjs
+- src/bridge/feishu.mjs
+- src/config.mjs
+- .env.example
+- README.md
+
+验证记录：
+- node --check src/tool/sql.mjs
+- node --check src/gateway/server.mjs
+- node --check src/bridge/feishu.mjs
+- node --check src/config.mjs
+- 结果：通过
+

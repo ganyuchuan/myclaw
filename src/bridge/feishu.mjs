@@ -399,6 +399,7 @@ async function routeCommand({
   runCopilotRequest,
   copilotCfg,
   gitCfg,
+  sqlCfg,
   serviceCfg,
   chatId,
   senderOpenId,
@@ -414,6 +415,7 @@ async function routeCommand({
     return [
       "支持命令:",
       "/copilot <prompt>",
+      "/sql <自然语言查询>",
       "/git <args>",
       "/service restart <gateway|bridge|all>",
       "/skills list",
@@ -463,6 +465,31 @@ async function routeCommand({
 
     const payload = await gatewayClient.request("git", { command: rest });
     return String(payload?.output ?? "").trim() || "(empty output)";
+  }
+
+  if (cmd === "/sql") {
+    if (!sqlCfg?.enabled) {
+      throw new Error("sql tool is disabled");
+    }
+
+    if (!rest) {
+      throw new Error("usage: /sql <自然语言查询>");
+    }
+
+    const payload = await gatewayClient.request("sql", { text: rest });
+    const lines = [`SQL: ${String(payload?.sql ?? "").trim()}`];
+
+    const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+    if (rows.length > 0) {
+      lines.push(`Rows(${rows.length}):`);
+      lines.push(JSON.stringify(rows, null, 2));
+    } else if (payload?.output) {
+      lines.push(String(payload.output));
+    } else {
+      lines.push("(no rows)");
+    }
+
+    return lines.join("\n");
   }
 
   if (cmd === "/service") {
@@ -693,6 +720,7 @@ assertConfig(feishuCfg);
 
 const copilotCfg = config.copilot;
 const gitCfg = config.git;
+const sqlCfg = config.sql;
 const serviceCfg = config.service;
 
 const gatewayClient = createGatewayClient({
@@ -855,6 +883,7 @@ dispatcher.register({
         runCopilotRequest,
         copilotCfg,
         gitCfg,
+        sqlCfg,
         serviceCfg,
         chatId,
         senderOpenId,

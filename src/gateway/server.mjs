@@ -4,6 +4,7 @@ import { WebSocketServer } from "ws";
 import { generateAssistantReply } from "../model/client.mjs";
 import { resetSharedCopilotSessionId, runCopilotWithSharedSession } from "../tool/copilot.mjs";
 import { runGitCommand } from "../tool/git.mjs";
+import { runSqlRequest } from "../tool/sql.mjs";
 import { restartService } from "../tool/service.mjs";
 import { addSkill, listSkills, removeSkill } from "../tool/skills.mjs";
 import { listMcpServers, removeMcpServer, upsertMcpServers } from "../tool/mcp.mjs";
@@ -15,7 +16,7 @@ import {
   safeParseJson,
 } from "./protocol.mjs";
 
-const METHODS = ["connect", "send", "agent", "copilot", "git", "service.restart", "skills.list", "skills.add", "skills.remove", "mcp.list", "mcp.add", "mcp.remove", "cron.list", "cron.add", "cron.update", "cron.remove", "cron.run", "health"];
+const METHODS = ["connect", "send", "agent", "copilot", "git", "sql", "service.restart", "skills.list", "skills.add", "skills.remove", "mcp.list", "mcp.add", "mcp.remove", "cron.list", "cron.add", "cron.update", "cron.remove", "cron.run", "health"];
 
 export function createGatewayServer(config, { cronScheduler } = {}) {
   const sessions = new Map();
@@ -331,6 +332,42 @@ export function createGatewayServer(config, { cronScheduler } = {}) {
               }),
             ),
           );
+          return;
+        }
+
+        if (frame.method === "sql") {
+          if (!config.sql?.enabled) {
+            socket.send(JSON.stringify(badRequest(frame.id, "sql tool is disabled")));
+            return;
+          }
+
+          const text = String(frame.params?.text ?? frame.params?.prompt ?? "").trim();
+          if (!text) {
+            socket.send(JSON.stringify(badRequest(frame.id, "sql.text is required")));
+            return;
+          }
+
+          const result = await runSqlRequest({
+            text,
+            config: config.sql,
+            copilotConfig: config.copilot,
+          });
+
+          if (!result.ok) {
+            socket.send(
+              JSON.stringify(
+                makeResponse(
+                  frame.id,
+                  false,
+                  result,
+                  makeError("TOOL_ERROR", result.output || "sql execution failed"),
+                ),
+              ),
+            );
+            return;
+          }
+
+          socket.send(JSON.stringify(makeResponse(frame.id, true, result)));
           return;
         }
 
