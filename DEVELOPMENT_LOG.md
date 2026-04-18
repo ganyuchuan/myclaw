@@ -815,3 +815,44 @@
 - node --check src/config.mjs
 - 结果：通过
 
+---
+
+## 2026-04-18
+
+### 26) 新增 cron.nl 自然语言调度入口并改为显式 `/cron nl` 命令
+
+关联提交：本次提交
+
+变更目标：
+- 增加网关 `cron.nl` 方法，将自然语言转换为结构化 cron 操作后执行。
+- 飞书端将隐式自然语言回退改为显式子命令：`/cron nl <自然语言>`。
+- 避免自然语言规划 prompt 污染共享会话：cron 规划器改为独立新会话执行。
+
+主要改动：
+- `src/tool/cron.mjs`
+  - 新增 cron 规划器模块：`planCronOperation`。
+  - 通过 `runCopilotWithSession` 执行自然语言规划，并设置 `reuseSession: false`，确保每次规划使用新会话。
+  - 解析 Copilot 返回 JSON，限制 action 为 `list/add/update/remove/run`。
+- `src/gateway/server.mjs`
+  - `METHODS` 增加 `cron.nl`。
+  - 新增 `cron.nl` 路由：先调用规划器，再按解释结果分发到 `cron.list/add/update/remove/run`。
+- `src/bridge/feishu.mjs`
+  - `/help` 增加 `/cron nl <自然语言>`。
+  - `/cron` 路由新增 `nl` 子命令分支。
+  - 移除“未知子命令自动走自然语言”行为，改为明确 usage 提示。
+- `README.md`
+  - 方法列表增加 `cron.nl`。
+  - 增加 `cron.nl` 网关请求示例与飞书自然语言命令说明。
+
+涉及文件：
+- src/tool/cron.mjs
+- src/gateway/server.mjs
+- src/bridge/feishu.mjs
+- README.md
+
+验证记录：
+- node --check src/tool/cron.mjs
+- node --check src/gateway/server.mjs
+- node --check src/bridge/feishu.mjs
+- 结果：通过
+

@@ -392,6 +392,26 @@ function withFeishuNotificationTarget(params, { chatId, senderOpenId }) {
   };
 }
 
+function formatCronNlReply(payload) {
+  const interpreted = payload?.interpreted && typeof payload.interpreted === "object"
+    ? payload.interpreted
+    : {};
+  const action = String(interpreted?.action ?? "").trim();
+  const reason = String(interpreted?.reason ?? "").trim();
+  const paramsText = JSON.stringify(interpreted?.params ?? {}, null, 2);
+  const resultText = JSON.stringify(payload?.result ?? {}, null, 2);
+
+  return [
+    "cron.nl 已执行",
+    action ? `action: ${action}` : "",
+    reason ? `reason: ${reason}` : "",
+    `params: ${paramsText}`,
+    `result: ${resultText}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 async function routeCommand({
   text,
   sessionId,
@@ -430,6 +450,7 @@ async function routeCommand({
       "/cron remove <jobId>",
       "/cron add <json>",
       "/cron update <jobId> <jsonPatch>",
+      "/cron nl <自然语言>",
     ].join("\n");
   }
 
@@ -608,7 +629,7 @@ async function routeCommand({
 
   if (cmd === "/cron") {
     if (!rest) {
-      throw new Error("usage: /cron <list|run|remove|add|update> ...");
+      throw new Error("usage: /cron <list|run|remove|add|update|nl> ...");
     }
 
     const [actionRaw, ...parts] = rest.split(/\s+/);
@@ -664,7 +685,28 @@ async function routeCommand({
       return JSON.stringify(payload?.job ?? payload ?? {}, null, 2);
     }
 
-    throw new Error("usage: /cron <list|run|remove|add|update> ...");
+    if (action === "nl") {
+      const nlText = parts.join(" ").trim();
+      if (!nlText) {
+        throw new Error("usage: /cron nl <自然语言>");
+      }
+
+      if (!copilotCfg?.enabled) {
+        throw new Error("cron 自然语言模式依赖 copilot，请启用 COPILOT_ENABLED=true");
+      }
+
+      const payload = await gatewayClient.request("cron.nl", {
+        text: nlText,
+        notify: {
+          type: "feishu",
+          chatId,
+          senderOpenId,
+        },
+      });
+      return formatCronNlReply(payload);
+    }
+
+    throw new Error("usage: /cron <list|run|remove|add|update|nl> ...");
   }
 
   return null;

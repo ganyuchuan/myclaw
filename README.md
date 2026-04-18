@@ -6,7 +6,7 @@ This is a minimal Gateway-only MVP inspired by OpenClaw.
 
 - WebSocket gateway at `/ws`
 - First-frame `connect` handshake with token auth
-- Minimal methods: `connect`, `health`, `send`, `agent`, `copilot`, `git`, `sql`, `service.restart`, `skills.*`, `mcp.*`, `cron.*`
+- Minimal methods: `connect`, `health`, `send`, `agent`, `copilot`, `git`, `sql`, `service.restart`, `skills.*`, `mcp.*`, `cron.*`, `cron.nl`
 - In-memory sessions
 - Generic LLM adapter with one unified entrypoint
 - Supports `responses` and `chat_completions` protocols
@@ -558,6 +558,7 @@ Feishu bridge 通过 `config.copilot.enabled` 全局切换消息路由：
 - 飞书命令支持 `/git <args>`，通过 gateway `git` 方法在当前目录执行 allowlist 内 git 子命令
 - 飞书命令支持 `/service restart <gateway|bridge|all>`，通过 gateway `service.restart` 调用 PM2 执行重启
 - 飞书命令支持 `/skills list|add|remove`，通过 gateway `skills.*` 管理 Copilot Skills 加载目录
+- 飞书命令支持 `/cron nl <自然语言>`，由 gateway `cron.nl` 调用 Copilot 解析后再执行 `cron.add|update|remove|run|list`
 
 交互流程：
 
@@ -713,6 +714,17 @@ FEISHU_REQUEST_TIMEOUT_MS=130000
 
 ```json
 { "type": "req", "id": "14", "method": "cron.run", "params": { "id": "<job-id>" } }
+```
+
+**cron.nl** — 自然语言操作任务（由 Copilot 转换成结构化操作并执行）
+
+```json
+{
+  "type": "req",
+  "id": "15",
+  "method": "cron.nl",
+  "params": { "text": "每天早上 9 点执行一次 copilot，总结昨天工作并推送到当前会话" }
+}
 ```
 
 ### WebSocket 事件

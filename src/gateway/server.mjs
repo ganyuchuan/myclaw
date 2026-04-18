@@ -4,6 +4,7 @@ import { WebSocketServer } from "ws";
 import { generateAssistantReply } from "../model/client.mjs";
 import { resetSharedCopilotSessionId, runCopilotWithSharedSession } from "../tool/copilot.mjs";
 import { runGitCommand } from "../tool/git.mjs";
+import { planCronOperation } from "../tool/cron.mjs";
 import { runSqlRequest } from "../tool/sql.mjs";
 import { restartService } from "../tool/service.mjs";
 import { addSkill, listSkills, removeSkill } from "../tool/skills.mjs";
@@ -16,7 +17,7 @@ import {
   safeParseJson,
 } from "./protocol.mjs";
 
-const METHODS = ["connect", "send", "agent", "copilot", "git", "sql", "service.restart", "skills.list", "skills.add", "skills.remove", "mcp.list", "mcp.add", "mcp.remove", "cron.list", "cron.add", "cron.update", "cron.remove", "cron.run", "health"];
+const METHODS = ["connect", "send", "agent", "copilot", "git", "sql", "service.restart", "skills.list", "skills.add", "skills.remove", "mcp.list", "mcp.add", "mcp.remove", "cron.list", "cron.add", "cron.update", "cron.remove", "cron.run", "cron.nl", "health"];
 
 export function createGatewayServer(config, { cronScheduler } = {}) {
   const sessions = new Map();
@@ -555,6 +556,76 @@ export function createGatewayServer(config, { cronScheduler } = {}) {
           }
           const result = await cronScheduler.run(id);
           socket.send(JSON.stringify(makeResponse(frame.id, true, result)));
+          return;
+        }
+
+        if (frame.method === "cron.nl") {
+          if (!cronScheduler) {
+            socket.send(JSON.stringify(badRequest(frame.id, "cron subsystem is disabled")));
+            return;
+          }
+
+          const text = String(frame.params?.text ?? frame.params?.prompt ?? "").trim();
+          if (!text) {
+            socket.send(JSON.stringify(badRequest(frame.id, "cron.nl.text is required")));
+            return;
+          }
+
+          const plan = await planCronOperation({
+            text,
+            copilotConfig: config.copilot,
+            jobs: cronScheduler.list(),
+          });
+
+          const action = plan.interpreted?.action;
+          const params = plan.interpreted?.params ?? {};
+          let result;
+
+          if (action === "list") {
+            result = { jobs: cronScheduler.list() };
+          } else if (action === "run") {
+            const id = String(params?.id ?? "").trim();
+            if (!id) {
+              socket.send(JSON.stringify(badRequest(frame.id, "cron.nl interpreted run without id")));
+              return;
+            }
+            result = await cronScheduler.run(id);
+          } else if (action === "remove") {
+            const id = String(params?.id ?? "").trim();
+            if (!id) {
+              socket.send(JSON.stringify(badRequest(frame.id, "cron.nl interpreted remove without id")));
+              return;
+            }
+            result = cronScheduler.remove(id);
+          } else if (action === "update") {
+            const id = String(params?.id ?? "").trim();
+            if (!id) {
+              socket.send(JSON.stringify(badRequest(frame.id, "cron.nl interpreted update without id")));
+              return;
+            }
+            const { id: _ignored, ...patch } = params;
+            result = { job: cronScheduler.update(id, patch) };
+          } else if (action === "add") {
+            const mergedParams = { ...params };
+            if (!mergedParams.notify && frame.params?.notify) {
+              mergedParams.notify = frame.params.notify;
+            }
+            result = { job: cronScheduler.add(mergedParams) };
+          } else {
+            socket.send(JSON.stringify(badRequest(frame.id, `cron.nl unsupported action: ${String(action ?? "")}`)));
+            return;
+          }
+
+          socket.send(
+            JSON.stringify(
+              makeResponse(frame.id, true, {
+                naturalLanguage: text,
+                interpreted: plan.interpreted,
+                result,
+                sessionId: plan.sessionId || undefined,
+              }),
+            ),
+          );
           return;
         }
 
