@@ -1,5 +1,5 @@
 import path from "node:path";
-import { runCopilotWithSharedSession } from "./copilot.mjs";
+import { runCopilotWithSession } from "./copilot.mjs";
 
 function buildSqlGenerationPrompt({ nlQuery, dbFile, schemaHint }) {
   const schemaBlock = schemaHint
@@ -39,9 +39,12 @@ export async function runSqlRequest({ text = "", config = {}, copilotConfig = {}
     schemaHint: String(config.schemaHint ?? "").trim(),
   });
 
-  const { output, sessionId } = await runCopilotWithSharedSession({
+  const { output, sessionId } = await runCopilotWithSession({
     prompt,
-    config: copilotConfig,
+    config: {
+      ...copilotConfig,
+      reuseSession: false,
+    },
   });
 
   return {

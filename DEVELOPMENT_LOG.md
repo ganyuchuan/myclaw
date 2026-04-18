@@ -856,3 +856,24 @@
 - node --check src/bridge/feishu.mjs
 - 结果：通过
 
+---
+
+### 27) SQL 工具改为单次会话执行（不复用共享 Copilot 会话）
+
+关联提交：本次提交
+
+变更目标：
+- 避免 SQL 任务受历史共享会话上下文影响，确保每次 SQL 请求在新会话中执行。
+
+主要改动：
+- `src/tool/sql.mjs`
+  - 调用入口从 `runCopilotWithSharedSession` 改为 `runCopilotWithSession`。
+  - 调用参数中显式设置 `reuseSession: false`，强制不复用会话。
+
+涉及文件：
+- src/tool/sql.mjs
+
+验证记录：
+- node --check src/tool/sql.mjs
+- 结果：通过
+
