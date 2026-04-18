@@ -877,3 +877,47 @@
 - node --check src/tool/sql.mjs
 - 结果：通过
 
+---
+
+### 28) Service 能力升级：多指令 + 可配置 target 映射 + /help 按开关显示
+
+关联提交：本次提交
+
+变更目标：
+- 当 `SERVICE_ENABLED=false` 时，飞书 `/help` 不显示任何 `/service` 命令项。
+- 将 service 工具从仅 `restart` 升级为 `list/start/stop/restart/logs`。
+- 支持通过配置扩展并管理其它子 service（自定义 target -> pm2 进程名映射）。
+
+主要改动：
+- `src/bridge/feishu.mjs`
+  - `/help` 中的 service 命令按 `serviceCfg.enabled` 动态显示/隐藏。
+  - `/service` 路由支持 `list|start|stop|restart|logs`。
+  - `logs` 支持可选参数 `lines`（默认由服务端回退）。
+- `src/gateway/server.mjs`
+  - `METHODS` 增加 `service.list`、`service.start`、`service.stop`、`service.logs`。
+  - service 路由改为统一分发到 `runServiceAction`。
+- `src/tool/service.mjs`
+  - 新增通用执行入口 `runServiceAction`。
+  - 统一 PM2 执行逻辑，支持五类 action。
+  - 支持从 `config.service.targets` 解析 target 映射。
+  - 保留 `restartService` 作为兼容封装。
+- `src/config.mjs`
+  - 新增 `SERVICE_TARGETS` 解析（JSON），并与默认 `gateway/bridge/all` 合并。
+- `README.md`
+  - 更新 methods、环境变量、service 使用说明与飞书命令示例。
+
+涉及文件：
+- README.md
+- src/bridge/feishu.mjs
+- src/config.mjs
+- src/gateway/server.mjs
+- src/tool/service.mjs
+
+验证记录：
+- node --check src/config.mjs
+- node --check src/tool/service.mjs
+- node --check src/gateway/server.mjs
+- node --check src/bridge/feishu.mjs
+- node --input-type=module -e "import { config } from './src/config.mjs'; import { runServiceAction } from './src/tool/service.mjs'; const result = await runServiceAction({ action: 'list', config: config.service }); console.log(JSON.stringify({ ok: result.ok, action: result.action }, null, 2));"
+- 结果：通过
+

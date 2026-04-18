@@ -29,6 +29,48 @@ const toList = (value, fallback = []) => {
     .filter(Boolean);
 };
 
+const toServiceTargets = (value, fallback = {}) => {
+  const raw = String(value ?? "").trim();
+  if (!raw) {
+    return { ...fallback };
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { ...fallback };
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ...fallback };
+  }
+
+  const result = {};
+  for (const [target, namesRaw] of Object.entries(parsed)) {
+    const normalizedTarget = String(target ?? "").trim().toLowerCase();
+    if (!normalizedTarget) {
+      continue;
+    }
+
+    const names = Array.isArray(namesRaw)
+      ? namesRaw.map((item) => String(item ?? "").trim()).filter(Boolean)
+      : String(namesRaw ?? "")
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean);
+
+    if (names.length > 0) {
+      result[normalizedTarget] = names;
+    }
+  }
+
+  return {
+    ...fallback,
+    ...result,
+  };
+};
+
 export const config = {
   port: toInt(process.env.PORT, 18789),
   gatewayToken: process.env.GATEWAY_TOKEN?.trim() || "dev-token",
@@ -94,6 +136,14 @@ export const config = {
     pm2Bin: process.env.SERVICE_PM2_BIN?.trim() || "pm2",
     pm2GatewayName: process.env.SERVICE_PM2_GATEWAY_NAME?.trim() || "myclaw-gateway",
     pm2BridgeName: process.env.SERVICE_PM2_BRIDGE_NAME?.trim() || "myclaw-feishu",
+    targets: toServiceTargets(process.env.SERVICE_TARGETS, {
+      gateway: [process.env.SERVICE_PM2_GATEWAY_NAME?.trim() || "myclaw-gateway"],
+      bridge: [process.env.SERVICE_PM2_BRIDGE_NAME?.trim() || "myclaw-feishu"],
+      all: [
+        process.env.SERVICE_PM2_BRIDGE_NAME?.trim() || "myclaw-feishu",
+        process.env.SERVICE_PM2_GATEWAY_NAME?.trim() || "myclaw-gateway",
+      ],
+    }),
   },
   cron: {
     enabled: toBool(process.env.CRON_ENABLED, true),

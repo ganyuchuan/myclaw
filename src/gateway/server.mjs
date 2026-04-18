@@ -6,7 +6,7 @@ import { resetSharedCopilotSessionId, runCopilotWithSharedSession } from "../too
 import { runGitCommand } from "../tool/git.mjs";
 import { planCronOperation } from "../tool/cron.mjs";
 import { runSqlRequest } from "../tool/sql.mjs";
-import { restartService } from "../tool/service.mjs";
+import { runServiceAction } from "../tool/service.mjs";
 import { addSkill, listSkills, removeSkill } from "../tool/skills.mjs";
 import { listMcpServers, removeMcpServer, upsertMcpServers } from "../tool/mcp.mjs";
 import {
@@ -17,7 +17,7 @@ import {
   safeParseJson,
 } from "./protocol.mjs";
 
-const METHODS = ["connect", "send", "agent", "copilot", "git", "sql", "service.restart", "skills.list", "skills.add", "skills.remove", "mcp.list", "mcp.add", "mcp.remove", "cron.list", "cron.add", "cron.update", "cron.remove", "cron.run", "cron.nl", "health"];
+const METHODS = ["connect", "send", "agent", "copilot", "git", "sql", "service.list", "service.start", "service.stop", "service.restart", "service.logs", "skills.list", "skills.add", "skills.remove", "mcp.list", "mcp.add", "mcp.remove", "cron.list", "cron.add", "cron.update", "cron.remove", "cron.run", "cron.nl", "health"];
 
 export function createGatewayServer(config, { cronScheduler } = {}) {
   const sessions = new Map();
@@ -372,20 +372,25 @@ export function createGatewayServer(config, { cronScheduler } = {}) {
           return;
         }
 
-        if (frame.method === "service.restart") {
+        if (["service.list", "service.start", "service.stop", "service.restart", "service.logs"].includes(frame.method)) {
           if (!config.service?.enabled) {
             socket.send(JSON.stringify(badRequest(frame.id, "service tool is disabled")));
             return;
           }
 
+          const action = String(frame.method.split(".")[1] ?? "").trim().toLowerCase();
           const target = String(frame.params?.target ?? "").trim().toLowerCase();
-          if (!target) {
-            socket.send(JSON.stringify(badRequest(frame.id, "service.restart target is required")));
+          const lines = frame.params?.lines;
+
+          if (action !== "list" && !target) {
+            socket.send(JSON.stringify(badRequest(frame.id, `service.${action} target is required`)));
             return;
           }
 
-          const result = await restartService({
+          const result = await runServiceAction({
+            action,
             target,
+            lines,
             config: config.service,
           });
 
@@ -396,7 +401,7 @@ export function createGatewayServer(config, { cronScheduler } = {}) {
                   frame.id,
                   false,
                   result,
-                  makeError("TOOL_ERROR", result.output || "service restart failed"),
+                  makeError("TOOL_ERROR", result.output || `service ${action} failed`),
                 ),
               ),
             );

@@ -432,12 +432,22 @@ async function routeCommand({
   const { cmd, rest } = command;
 
   if (cmd === "/help") {
+    const serviceHelp = serviceCfg?.enabled
+      ? [
+          "/service list",
+          "/service start <target>",
+          "/service stop <target>",
+          "/service restart <target>",
+          "/service logs <target> [lines]",
+        ]
+      : [];
+
     return [
       "支持命令:",
       "/copilot <prompt>",
       "/sql <自然语言查询>",
       "/git <args>",
-      "/service restart <gateway|bridge|all>",
+      ...serviceHelp,
       "/skills list",
       "/skills add <path>",
       "/skills remove <path>",
@@ -518,15 +528,26 @@ async function routeCommand({
       throw new Error("service tool is disabled");
     }
 
-    const [actionRaw, targetRaw] = String(rest ?? "").split(/\s+/).filter(Boolean);
+    const [actionRaw, targetRaw, linesRaw] = String(rest ?? "").split(/\s+/).filter(Boolean);
     const action = String(actionRaw ?? "").toLowerCase();
     const target = String(targetRaw ?? "").toLowerCase();
+    const lines = Number.parseInt(String(linesRaw ?? ""), 10);
+    const actionSet = new Set(["list", "start", "stop", "restart", "logs"]);
 
-    if (action !== "restart" || !target) {
-      throw new Error("usage: /service restart <gateway|bridge|all>");
+    if (!actionSet.has(action)) {
+      throw new Error("usage: /service <list|start|stop|restart|logs> [target] [lines]");
     }
 
-    const payload = await gatewayClient.request("service.restart", { target });
+    if (action !== "list" && !target) {
+      throw new Error(`usage: /service ${action} <target>${action === "logs" ? " [lines]" : ""}`);
+    }
+
+    const params = action === "list" ? {} : { target };
+    if (action === "logs" && Number.isFinite(lines) && lines > 0) {
+      params.lines = lines;
+    }
+
+    const payload = await gatewayClient.request(`service.${action}`, params);
     return String(payload?.output ?? "").trim() || "(empty output)";
   }
 
