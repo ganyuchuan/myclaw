@@ -247,6 +247,7 @@ export function createGatewayServer(config, { cronScheduler } = {}) {
 
           const stream = Boolean(frame.params?.stream);
           const streamId = String(frame.params?.streamId ?? frame.id).trim() || frame.id;
+          const sessionKey = String(frame.params?.sessionKey ?? "").trim();
 
           const sendEvent = (event, payload) => {
             if (socket.readyState !== socket.OPEN) {
@@ -264,6 +265,7 @@ export function createGatewayServer(config, { cronScheduler } = {}) {
           const { output, sessionId } = await runCopilotWithSharedSession({
             prompt,
             config: config.copilot,
+            sessionKey,
             onDelta: stream
               ? (delta) => {
                   sendEvent("copilot.delta", {

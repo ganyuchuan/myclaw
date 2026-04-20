@@ -172,12 +172,15 @@ curl http://127.0.0.1:18790/health
 - `FEISHU_COPILOT_STREAM_ENABLED`: enable delta streaming push in Feishu copilot replies (`true`/`false`, default `true`)
 - `FEISHU_COPILOT_STREAM_FLUSH_INTERVAL_MS`: min interval between streaming flushes in Feishu bridge (default `800`)
 - `FEISHU_COPILOT_STREAM_MIN_CHUNK_CHARS`: min buffered chars before early flush in Feishu bridge (default `120`)
+- `FEISHU_ROUTE_TOTAL_SHARDS`: fixed-routing shard total for Feishu bridge (`1` means disabled, default `1`)
+- `FEISHU_ROUTE_SHARD_INDEX`: current Feishu bridge shard index (`0`-based, default `0`)
+- `FEISHU_ROUTE_SALT`: hashing salt used by Feishu fixed routing (default `myclaw-feishu-route`)
 - `COPILOT_ENABLED`: enable gh copilot tool (`true`/`false`, default `true`)
 - `COPILOT_TIMEOUT_MS`: timeout for Copilot SDK `sendAndWait` (default `120000`)
 - `COPILOT_MODEL`: model to use (empty = copilot default)
 - `COPILOT_ALLOW_ALL_TOOLS`: allow copilot to use all tools unattended (`true`/`false`, default `true`)
 - `COPILOT_WORK_DIR`: working directory for copilot (empty = process cwd)
-- `COPILOT_REUSE_SESSION`: reuse one shared copilot session in gateway `copilot` method (`true`/`false`, default `true`)
+- `COPILOT_REUSE_SESSION`: reuse shared copilot sessions in gateway `copilot` method (`true`/`false`, default `true`, keyed by `sessionKey` when provided)
 - `COPILOT_MCP_CONFIG_FILE`: MCP server config file for Copilot SDK session (`config/mcporter.json` by default)
 - `COPILOT_HOOK_ENABLED`: enable Copilot SDK hook policy layer (`true`/`false`, default `true`)
 - `COPILOT_BLOCKED_TOOLS`: comma-separated tool denylist enforced by hook (`onPreToolUse`)
@@ -584,6 +587,8 @@ Feishu bridge 通过 `config.copilot.enabled` 全局切换消息路由：
 - 当 `SERVICE_ENABLED=false` 时，`/help` 不显示任何 `/service` 项
 - 飞书命令支持 `/skills list|add|remove`，通过 gateway `skills.*` 管理 Copilot Skills 加载目录
 - 飞书命令支持 `/cron nl <自然语言>`，由 gateway `cron.nl` 调用 Copilot 解析后再执行 `cron.add|update|remove|run|list`
+- Copilot 模式下，Feishu bridge 会按 `appId + 会话类型(group|dm) + chatId/openId` 生成复合 `sessionKey`，用于隔离不同飞书会话的 Copilot 上下文
+- 可选固定路由：通过 `FEISHU_ROUTE_TOTAL_SHARDS/FEISHU_ROUTE_SHARD_INDEX` 让同一个飞书会话稳定落在同一个 bridge 实例处理
 
 交互流程：
 
@@ -822,3 +827,88 @@ curl http://127.0.0.1:18790/health
 
 - 同步失败不会影响本地 cron 执行，仅记录 warning 日志
 - 服务端数据落盘为 JSON（写临时文件 + rename）
+
+## 多实例应用
+
+假设在一台电脑上运行5个 myclaw gateway 实例，同时也有对应的5个 feishu bridge 实例。可以按两种模式配：
+
+方案 A（推荐）：5 对 1:1 独立，5 个 bridge 各自不同飞书应用  
+这种情况下不需要分片路由，配置最简单。
+
+每一对实例要保证这几项唯一或一一对应：
+
+1. 网关端口  
+- 实例1: PORT=18789  
+- 实例2: PORT=18790  
+- 实例3: PORT=18791  
+- 实例4: PORT=18792  
+- 实例5: PORT=18793
+
+2. bridge 指向对应网关  
+- 实例1 bridge: FEISHU_GATEWAY_URL=ws://127.0.0.1:18789/ws  
+- 实例2 bridge: FEISHU_GATEWAY_URL=ws://127.0.0.1:18790/ws  
+- 依次类推
+
+3. 飞书应用凭据（每个 bridge 自己的一套）  
+- FEISHU_APP_ID  
+- FEISHU_APP_SECRET
+
+4. bridge 客户端标识建议唯一  
+- FEISHU_CLIENT_ID=myclaw-feishu-1 到 myclaw-feishu-5
+
+5. 固定路由参数（可保持默认）  
+- FEISHU_ROUTE_TOTAL_SHARDS=1  
+- FEISHU_ROUTE_SHARD_INDEX=0  
+- FEISHU_ROUTE_SALT 任意（默认即可）
+
+6. 避免数据文件冲突（很重要）  
+每个网关实例建议分开这些文件：
+- CRON_JOBS_FILE
+- SQL_DB_FILE
+- COPILOT_MCP_CONFIG_FILE
+- COPILOT_SKILLS_FILE  
+例如加后缀 -1 到 -5。
+
+7. 如果启用 sync-server，也要分开端口  
+- SYNC_PORT 不能冲突。
+
+方案 B：5 个 bridge 共用同一个飞书应用  
+才需要启用分片路由：
+
+- 所有实例设置相同 FEISHU_ROUTE_TOTAL_SHARDS=5  
+- 每个实例 FEISHU_ROUTE_SHARD_INDEX 分别为 0,1,2,3,4  
+- 所有实例 FEISHU_ROUTE_SALT 必须一致  
+- FEISHU_APP_ID / FEISHU_APP_SECRET 相同  
+- 其它网关端口、文件路径仍要避免冲突
+
+### 关于5个 bridge 共用1个飞书机器人的场景
+
+这种场景挺常见，尤其在“一个机器人服务多个群/部门”的生产场景。比如：
+
+1. 高可用与故障切换  
+- 同一个飞书机器人要 7x24 服务，部署多实例避免单点故障。  
+- 某个实例挂了，其它实例接管。
+
+2. 高并发削峰  
+- 同一应用下消息量大（多个群同时高峰），需要横向扩容 bridge。
+
+3. 多租户但统一入口  
+- 对外只暴露一个机器人身份（同一个 app），内部按会话分片到不同实例处理。
+
+4. 灰度/金丝雀发布  
+- 同一 app 下部分会话走新版本实例，其他会话走旧版本，逐步放量。
+
+5. 资源隔离  
+- 同一 app 下将不同会话分散到不同实例，隔离 CPU/内存/模型调用压力。
+
+### 为什么要你现在这套“复合键 + 固定路由”
+
+1. 同 app 多实例是现实需求。  
+2. 没有固定路由时，同一会话可能被多个实例抢处理。  
+3. 你现在的分片参数正是为这个场景准备的：
+- FEISHU_ROUTE_TOTAL_SHARDS=5
+- 每实例 FEISHU_ROUTE_SHARD_INDEX=0..4
+- FEISHU_ROUTE_SALT 全实例一致
+
+一句话：  
+“5 个 bridge 共用同一个飞书应用”不仅有场景，而且是做高可用/扩展时的标准形态。

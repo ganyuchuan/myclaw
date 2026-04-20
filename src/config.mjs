@@ -7,6 +7,11 @@ const toInt = (value, fallback) => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 
+const toNonNegativeInt = (value, fallback) => {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+};
+
 const toBool = (value, fallback = false) => {
   const normalized = String(value ?? "").trim().toLowerCase();
   if (["1", "true", "yes", "on"].includes(normalized)) {
@@ -127,6 +132,9 @@ export const config = {
     copilotStreamEnabled: toBool(process.env.FEISHU_COPILOT_STREAM_ENABLED, true),
     copilotStreamFlushIntervalMs: toInt(process.env.FEISHU_COPILOT_STREAM_FLUSH_INTERVAL_MS, 800),
     copilotStreamMinChunkChars: toInt(process.env.FEISHU_COPILOT_STREAM_MIN_CHUNK_CHARS, 120),
+    routeTotalShards: toInt(process.env.FEISHU_ROUTE_TOTAL_SHARDS, 1),
+    routeShardIndex: toNonNegativeInt(process.env.FEISHU_ROUTE_SHARD_INDEX, 0),
+    routeSalt: process.env.FEISHU_ROUTE_SALT?.trim() || "myclaw-feishu-route",
   },
   maxPayloadBytes: 1024 * 1024,
 };

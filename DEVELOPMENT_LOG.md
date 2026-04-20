@@ -963,3 +963,50 @@
 - node --check src/bridge/feishu.mjs
 - 结果：通过
 
+---
+
+### 30) Copilot 会话按飞书复合键隔离 + Feishu 固定路由分片
+
+关联提交：本次提交
+
+变更目标：
+- 将 Copilot 共享会话从“单一全局 session”升级为“按 `sessionKey` 复用”。
+- Feishu bridge 在 Copilot 模式下按 `appId + 会话类型 + chatId/openId` 生成复合会话键，避免不同飞书会话上下文混用。
+- 增加 Feishu 固定路由分片能力，支持同一会话稳定命中同一 bridge 实例处理。
+
+主要改动：
+- `src/tool/copilot.mjs`
+  - 共享会话状态由单值改为按 key 的 Map 结构（session/queue/sessionId/signature）。
+  - `runCopilotWithSharedSession` 新增可选参数 `sessionKey`（默认仍兼容全局 key）。
+  - `resetSharedCopilotSessionId` 支持按 key 清理或全量清理。
+- `src/gateway/server.mjs`
+  - `copilot` 方法支持透传 `params.sessionKey` 给 `runCopilotWithSharedSession`。
+- `src/bridge/feishu.mjs`
+  - 新增飞书复合会话键生成：`feishu:${appId}:group:${chatId}` 或 `feishu:${appId}:dm:${openId}`。
+  - Copilot 请求统一携带 `sessionKey`。
+  - 新增固定路由分片逻辑（hash + shard）：
+    - `FEISHU_ROUTE_TOTAL_SHARDS`
+    - `FEISHU_ROUTE_SHARD_INDEX`
+    - `FEISHU_ROUTE_SALT`
+  - 非当前 shard 负责的会话将直接跳过处理。
+- `src/config.mjs`
+  - 新增 Feishu 路由配置读取。
+- `.env.example` / `README.md`
+  - 新增配置项与行为说明文档。
+
+涉及文件：
+- .env.example
+- README.md
+- DEVELOPMENT_LOG.md
+- src/bridge/feishu.mjs
+- src/config.mjs
+- src/gateway/server.mjs
+- src/tool/copilot.mjs
+
+验证记录：
+- node --check src/tool/copilot.mjs
+- node --check src/gateway/server.mjs
+- node --check src/bridge/feishu.mjs
+- node --check src/config.mjs
+- 结果：通过
+

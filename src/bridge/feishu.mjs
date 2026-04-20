@@ -1,4 +1,5 @@
 import * as Lark from "@larksuiteoapi/node-sdk";
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "../config.mjs";
@@ -267,6 +268,44 @@ function clipText(value, maxChars = 500) {
     return text;
   }
   return `${text.slice(0, maxChars)}...`;
+}
+
+function makeFeishuConversationScope({ appId, chatType, chatId, senderOpenId }) {
+  const appScope = String(appId ?? "").trim() || "unknown-app";
+  if (chatType === "group") {
+    return `feishu:${appScope}:group:${chatId}`;
+  }
+  return `feishu:${appScope}:dm:${senderOpenId}`;
+}
+
+function getStableShardIndex(key, totalShards) {
+  const digest = crypto.createHash("sha1").update(String(key)).digest();
+  const number = digest.readUInt32BE(0);
+  return number % totalShards;
+}
+
+function shouldHandleFeishuConversation(scopeKey, feishuCfg) {
+  const total = Number.isFinite(feishuCfg?.routeTotalShards) && feishuCfg.routeTotalShards > 0
+    ? Number.parseInt(String(feishuCfg.routeTotalShards), 10)
+    : 1;
+
+  if (total <= 1) {
+    return { shouldHandle: true, shard: 0, total, index: 0 };
+  }
+
+  const rawIndex = Number.isFinite(feishuCfg?.routeShardIndex)
+    ? Number.parseInt(String(feishuCfg.routeShardIndex), 10)
+    : 0;
+  const index = ((rawIndex % total) + total) % total;
+  const salt = String(feishuCfg?.routeSalt ?? "").trim();
+  const shard = getStableShardIndex(`${salt}:${scopeKey}`, total);
+
+  return {
+    shouldHandle: shard === index,
+    shard,
+    total,
+    index,
+  };
 }
 
 function makeStreamId() {
@@ -847,6 +886,9 @@ console.log(
 console.log(
   `[feishu-bridge] copilot stream: enabled=${feishuCfg.copilotStreamEnabled} flushIntervalMs=${feishuCfg.copilotStreamFlushIntervalMs} minChunkChars=${feishuCfg.copilotStreamMinChunkChars}`,
 );
+console.log(
+  `[feishu-bridge] routing: totalShards=${feishuCfg.routeTotalShards} shardIndex=${feishuCfg.routeShardIndex} salt=${feishuCfg.routeSalt}`,
+);
 console.log(`[feishu-bridge] gateway: ${feishuCfg.gatewayUrl} clientId=${feishuCfg.clientId}`);
 console.log(`[feishu-bridge] botOpenId: ${botOpenId || "unknown"}`);
 
@@ -864,6 +906,17 @@ dispatcher.register({
     const mentions = Array.isArray(message?.mentions) ? message.mentions : [];
 
     if (!messageId || !chatId || !senderOpenId) {
+      return;
+    }
+
+    const copilotSessionKey = makeFeishuConversationScope({
+      appId: feishuCfg.appId,
+      chatType,
+      chatId,
+      senderOpenId,
+    });
+    const routeDecision = shouldHandleFeishuConversation(copilotSessionKey, feishuCfg);
+    if (!routeDecision.shouldHandle) {
       return;
     }
 
@@ -920,7 +973,7 @@ dispatcher.register({
 
       const runCopilotRequest = async (prompt) => {
         if (!feishuCfg.copilotStreamEnabled) {
-          return gatewayClient.request("copilot", { prompt });
+          return gatewayClient.request("copilot", { prompt, sessionKey: copilotSessionKey });
         }
 
         const effectiveStreamId = copilotStreamManager.create(chatId, messageId);
@@ -928,6 +981,7 @@ dispatcher.register({
         try {
           const payload = await gatewayClient.request("copilot", {
             prompt,
+            sessionKey: copilotSessionKey,
             stream: true,
             streamId: effectiveStreamId,
           });

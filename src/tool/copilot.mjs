@@ -3,17 +3,70 @@ import path from "node:path";
 import { getSkillDirectoriesForSession } from "./skills.mjs";
 import { loadMcpServersForCopilot } from "./mcp.mjs";
 
-let sharedCopilotSessionId = "";
-let sharedSessionQueue = Promise.resolve();
+const DEFAULT_SHARED_SESSION_KEY = "__global__";
+
+let sharedSessionQueues = new Map();
 let sdkClient = null;
 let sdkClientCwd = "";
-let sharedSession = null;
-let sharedSkillSignature = "";
+let sharedSessions = new Map();
+let sharedCopilotSessionIds = new Map();
+let sharedSkillSignatures = new Map();
 
-function withSharedSessionLock(task) {
-  const run = sharedSessionQueue.then(task, task);
+function normalizeSessionKey(sessionKey) {
+  const normalized = String(sessionKey ?? "").trim();
+  return normalized || DEFAULT_SHARED_SESSION_KEY;
+}
+
+function getSharedSessionIdForKey(sessionKey) {
+  return sharedCopilotSessionIds.get(normalizeSessionKey(sessionKey)) || "";
+}
+
+function setSharedSessionIdForKey(sessionKey, sessionId) {
+  const key = normalizeSessionKey(sessionKey);
+  const normalizedSessionId = String(sessionId ?? "").trim();
+  if (normalizedSessionId) {
+    sharedCopilotSessionIds.set(key, normalizedSessionId);
+  } else {
+    sharedCopilotSessionIds.delete(key);
+  }
+}
+
+async function disconnectSharedSessionForKey(sessionKey) {
+  const key = normalizeSessionKey(sessionKey);
+  const existing = sharedSessions.get(key);
+  if (existing) {
+    await existing.disconnect().catch(() => {});
+  }
+  sharedSessions.delete(key);
+  sharedSkillSignatures.delete(key);
+  sharedSessionQueues.delete(key);
+  sharedCopilotSessionIds.delete(key);
+}
+
+async function resetAllSharedSessions() {
+  const keys = new Set([
+    ...sharedSessions.keys(),
+    ...sharedCopilotSessionIds.keys(),
+    ...sharedSkillSignatures.keys(),
+    ...sharedSessionQueues.keys(),
+  ]);
+
+  for (const key of keys) {
+    await disconnectSharedSessionForKey(key);
+  }
+
+  sharedSessions = new Map();
+  sharedCopilotSessionIds = new Map();
+  sharedSkillSignatures = new Map();
+  sharedSessionQueues = new Map();
+}
+
+function withSharedSessionLock(sessionKey, task) {
+  const key = normalizeSessionKey(sessionKey);
+  const queue = sharedSessionQueues.get(key) || Promise.resolve();
+  const run = queue.then(task, task);
   // Keep queue alive even when one task fails.
-  sharedSessionQueue = run.catch(() => {});
+  sharedSessionQueues.set(key, run.catch(() => {}));
   return run;
 }
 
@@ -358,26 +411,25 @@ export async function runCopilotWithSession({
 }
 
 export function getSharedCopilotSessionId() {
-  return sharedCopilotSessionId;
+  return getSharedSessionIdForKey(DEFAULT_SHARED_SESSION_KEY);
 }
 
-export function setSharedCopilotSessionId(sessionId) {
-  const normalized = String(sessionId ?? "").trim();
-  sharedCopilotSessionId = normalized;
-  sharedSession = null;
+export function setSharedCopilotSessionId(sessionId, sessionKey = DEFAULT_SHARED_SESSION_KEY) {
+  setSharedSessionIdForKey(sessionKey, sessionId);
+  sharedSessions.delete(normalizeSessionKey(sessionKey));
 }
 
-export function resetSharedCopilotSessionId() {
-  sharedCopilotSessionId = "";
-  sharedSessionQueue = Promise.resolve();
-  sharedSkillSignature = "";
-  if (sharedSession) {
-    void sharedSession.disconnect().catch(() => {});
+export function resetSharedCopilotSessionId(sessionKey = "") {
+  if (sessionKey) {
+    void disconnectSharedSessionForKey(sessionKey);
+    return;
   }
-  sharedSession = null;
+
+  void resetAllSharedSessions();
 }
 
-async function getOrCreateSharedSession(config) {
+async function getOrCreateSharedSession(config, sessionKey) {
+  const key = normalizeSessionKey(sessionKey);
   const client = await ensureSdkClient(config);
   const sessionConfig = await buildSessionConfig(config);
   const nextSkillSignature = makeSessionSignature({
@@ -385,23 +437,26 @@ async function getOrCreateSharedSession(config) {
     mcpServers: sessionConfig.mcpServers,
   });
 
-  if (sharedSession && sharedSkillSignature !== nextSkillSignature) {
-    await sharedSession.disconnect().catch(() => {});
-    sharedSession = null;
-    sharedCopilotSessionId = "";
+  const existingSession = sharedSessions.get(key) || null;
+  const existingSignature = sharedSkillSignatures.get(key) || "";
+  if (existingSession && existingSignature !== nextSkillSignature) {
+    await disconnectSharedSessionForKey(key);
   }
 
-  if (sharedSession) {
-    return sharedSession;
+  const currentSession = sharedSessions.get(key) || null;
+  if (currentSession) {
+    return currentSession;
   }
 
-  sharedSession = sharedCopilotSessionId
-    ? await client.resumeSession(sharedCopilotSessionId, sessionConfig)
+  const resumeSessionId = getSharedSessionIdForKey(key);
+  const session = resumeSessionId
+    ? await client.resumeSession(resumeSessionId, sessionConfig)
     : await client.createSession(sessionConfig);
 
-  sharedCopilotSessionId = sharedSession.sessionId;
-  sharedSkillSignature = nextSkillSignature;
-  return sharedSession;
+  sharedSessions.set(key, session);
+  setSharedSessionIdForKey(key, session.sessionId);
+  sharedSkillSignatures.set(key, nextSkillSignature);
+  return session;
 }
 
 /**
@@ -412,7 +467,7 @@ async function getOrCreateSharedSession(config) {
  * @param {object} options.config
  * @returns {Promise<{ output: string, sessionId: string }>}
  */
-export async function runCopilotWithSharedSession({ prompt, config, onDelta, onDone }) {
+export async function runCopilotWithSharedSession({ prompt, config, sessionKey = DEFAULT_SHARED_SESSION_KEY, onDelta, onDone }) {
   if (!config?.reuseSession) {
     return runCopilotWithSession({
       prompt,
@@ -422,12 +477,14 @@ export async function runCopilotWithSharedSession({ prompt, config, onDelta, onD
     });
   }
 
-  return withSharedSessionLock(async () => {
+  const key = normalizeSessionKey(sessionKey);
+
+  return withSharedSessionLock(key, async () => {
     let retried = false;
 
     while (true) {
       try {
-        const session = await getOrCreateSharedSession(config);
+        const session = await getOrCreateSharedSession(config, key);
         const result = await runSessionPrompt({
           session,
           prompt,
@@ -435,17 +492,13 @@ export async function runCopilotWithSharedSession({ prompt, config, onDelta, onD
           onDelta,
           onDone,
         });
-        sharedCopilotSessionId = result.sessionId;
+        setSharedSessionIdForKey(key, result.sessionId);
         return result;
       } catch (error) {
-        if (sharedSession) {
-          await sharedSession.disconnect().catch(() => {});
-        }
-        sharedSession = null;
+        await disconnectSharedSessionForKey(key);
 
         if (!retried && isSessionNotFoundError(error)) {
           retried = true;
-          sharedCopilotSessionId = "";
           console.warn("[copilot-sdk] shared session not found, recreate and retry once");
           continue;
         }
@@ -457,10 +510,7 @@ export async function runCopilotWithSharedSession({ prompt, config, onDelta, onD
 }
 
 export async function stopCopilotClient() {
-  if (sharedSession) {
-    await sharedSession.disconnect().catch(() => {});
-    sharedSession = null;
-  }
+  await resetAllSharedSessions();
 
   if (!sdkClient) {
     return;
@@ -473,7 +523,8 @@ export async function stopCopilotClient() {
 
   sdkClient = null;
   sdkClientCwd = "";
-  sharedCopilotSessionId = "";
-  sharedSessionQueue = Promise.resolve();
-  sharedSkillSignature = "";
+  sharedSessions = new Map();
+  sharedCopilotSessionIds = new Map();
+  sharedSessionQueues = new Map();
+  sharedSkillSignatures = new Map();
 }
