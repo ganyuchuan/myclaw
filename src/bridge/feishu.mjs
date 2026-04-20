@@ -435,10 +435,10 @@ async function routeCommand({
     const serviceHelp = serviceCfg?.enabled
       ? [
           "/service list",
-          "/service start <target>",
-          "/service stop <target>",
-          "/service restart <target>",
-          "/service logs <target> [lines]",
+          "/service start <name>",
+          "/service stop <name>",
+          "/service restart <name>",
+          "/service logs <name> [lines]",
         ]
       : [];
 
@@ -528,21 +528,21 @@ async function routeCommand({
       throw new Error("service tool is disabled");
     }
 
-    const [actionRaw, targetRaw, linesRaw] = String(rest ?? "").split(/\s+/).filter(Boolean);
+    const [actionRaw, nameRaw, linesRaw] = String(rest ?? "").split(/\s+/).filter(Boolean);
     const action = String(actionRaw ?? "").toLowerCase();
-    const target = String(targetRaw ?? "").toLowerCase();
+    const name = String(nameRaw ?? "").trim();
     const lines = Number.parseInt(String(linesRaw ?? ""), 10);
     const actionSet = new Set(["list", "start", "stop", "restart", "logs"]);
 
     if (!actionSet.has(action)) {
-      throw new Error("usage: /service <list|start|stop|restart|logs> [target] [lines]");
+      throw new Error("usage: /service <list|start|stop|restart|logs> [name] [lines]");
     }
 
-    if (action !== "list" && !target) {
-      throw new Error(`usage: /service ${action} <target>${action === "logs" ? " [lines]" : ""}`);
+    if (action !== "list" && !name) {
+      throw new Error(`usage: /service ${action} <name>${action === "logs" ? " [lines]" : ""}`);
     }
 
-    const params = action === "list" ? {} : { target };
+    const params = action === "list" ? {} : { name };
     if (action === "logs" && Number.isFinite(lines) && lines > 0) {
       params.lines = lines;
     }

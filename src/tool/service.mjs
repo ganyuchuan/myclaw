@@ -17,60 +17,23 @@ function uniqueNonEmpty(list) {
   return result;
 }
 
-function resolveTargets(config) {
-  const configured = config?.targets;
-  const fallback = {
-    gateway: [String(config?.pm2GatewayName ?? "").trim()],
-    bridge: [String(config?.pm2BridgeName ?? "").trim()],
-    all: [String(config?.pm2BridgeName ?? "").trim(), String(config?.pm2GatewayName ?? "").trim()],
-  };
-
-  if (!configured || typeof configured !== "object" || Array.isArray(configured)) {
-    return {
-      gateway: uniqueNonEmpty(fallback.gateway),
-      bridge: uniqueNonEmpty(fallback.bridge),
-      all: uniqueNonEmpty(fallback.all),
-    };
+function resolveWhitelistedServiceName(name, config) {
+  const rawName = String(name ?? "").trim();
+  if (!rawName) {
+    throw new Error("service name is required");
   }
 
-  const result = {};
-  for (const [target, namesRaw] of Object.entries(configured)) {
-    const normalizedTarget = String(target ?? "").trim().toLowerCase();
-    if (!normalizedTarget) {
-      continue;
-    }
-
-    const names = Array.isArray(namesRaw)
-      ? namesRaw.map((item) => String(item ?? "").trim()).filter(Boolean)
-      : String(namesRaw ?? "")
-          .split(",")
-          .map((item) => item.trim())
-          .filter(Boolean);
-
-    if (names.length > 0) {
-      result[normalizedTarget] = uniqueNonEmpty(names);
-    }
+  const whitelist = uniqueNonEmpty(Array.isArray(config?.whitelist) ? config.whitelist : []);
+  if (whitelist.length === 0) {
+    throw new Error("service whitelist is empty, no service actions are allowed");
   }
 
-  return {
-    ...fallback,
-    ...result,
-    gateway: uniqueNonEmpty(result.gateway ?? fallback.gateway),
-    bridge: uniqueNonEmpty(result.bridge ?? fallback.bridge),
-    all: uniqueNonEmpty(result.all ?? fallback.all),
-  };
-}
-
-function resolveServiceNames(target, config) {
-  const targets = resolveTargets(config);
-  const serviceNames = targets[target];
-  if (!Array.isArray(serviceNames) || serviceNames.length === 0) {
-    const availableTargets = Object.keys(targets)
-      .sort()
-      .join(", ");
-    throw new Error(`target is not configured: ${target}. available targets: ${availableTargets}`);
+  const matched = whitelist.find((item) => item.toLowerCase() === rawName.toLowerCase());
+  if (!matched) {
+    throw new Error(`service is not allowed: ${rawName}. whitelist: ${whitelist.join(", ")}`);
   }
-  return uniqueNonEmpty(serviceNames);
+
+  return matched;
 }
 
 async function runPm2({ pm2Bin, args, timeoutMs, cwd }) {
@@ -122,7 +85,7 @@ function buildServiceArgs(action, serviceName, lines) {
   return [action, serviceName];
 }
 
-export async function runServiceAction({ action = "", target = "", lines = 50, config = {} }) {
+export async function runServiceAction({ action = "", name = "", lines = 50, config = {} }) {
   const normalizedAction = normalizeAction(action);
 
   const pm2Bin = String(config.pm2Bin ?? "pm2").trim() || "pm2";
@@ -141,58 +104,39 @@ export async function runServiceAction({ action = "", target = "", lines = 50, c
     return {
       ...result,
       action: normalizedAction,
-      target: "",
-      serviceNames: [],
+      name: "",
+      serviceName: "",
       results: [],
     };
   }
 
-  const normalizedTarget = String(target ?? "").trim().toLowerCase();
-  if (!normalizedTarget) {
-    throw new Error(`service.${normalizedAction} target is required`);
-  }
+  const serviceName = resolveWhitelistedServiceName(name, config);
+  const commandResult = await runPm2({
+    pm2Bin,
+    args: buildServiceArgs(normalizedAction, serviceName, logLines),
+    timeoutMs,
+    cwd,
+  });
 
-  const serviceNames = resolveServiceNames(normalizedTarget, config);
-  if (serviceNames.length === 0) {
-    throw new Error(`service names are not configured for target: ${normalizedTarget}`);
-  }
-
-  const results = [];
-  for (const serviceName of serviceNames) {
-    const commandResult = await runPm2({
-      pm2Bin,
-      args: buildServiceArgs(normalizedAction, serviceName, logLines),
-      timeoutMs,
-      cwd,
-    });
-
-    results.push({
-      serviceName,
-      ...commandResult,
-    });
-  }
-
-  const ok = results.every((item) => item.ok);
-  const output = results
-    .map((item) => `[${item.serviceName}] ${item.output || (item.ok ? normalizedAction : "failed")}`)
-    .join("\n")
-    .trim();
+  const results = [{ serviceName, ...commandResult }];
+  const ok = commandResult.ok;
+  const output = `[${serviceName}] ${commandResult.output || (ok ? normalizedAction : "failed")}`.trim();
 
   return {
     ok,
     action: normalizedAction,
-    target: normalizedTarget,
+    name: serviceName,
     pm2Bin,
-    serviceNames,
+    serviceName,
     results,
     output,
   };
 }
 
-export async function restartService({ target = "", config = {} }) {
+export async function restartService({ name = "", config = {} }) {
   return runServiceAction({
     action: "restart",
-    target,
+    name,
     config,
   });
 }

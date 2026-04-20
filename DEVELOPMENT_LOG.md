@@ -921,3 +921,45 @@
 - node --input-type=module -e "import { config } from './src/config.mjs'; import { runServiceAction } from './src/tool/service.mjs'; const result = await runServiceAction({ action: 'list', config: config.service }); console.log(JSON.stringify({ ok: result.ok, action: result.action }, null, 2));"
 - 结果：通过
 
+---
+
+### 29) Service 使用方式重构：`<target>` -> `<name>` + 白名单控制
+
+关联提交：本次提交
+
+变更目标：
+- 将 service 操作参数从 `/service <action> <target>` 切换为 `/service <action> <name>`。
+- 去掉 `SERVICE_PM2_GATEWAY_NAME`、`SERVICE_PM2_BRIDGE_NAME` 和 `SERVICE_TARGETS` 的 target 映射逻辑。
+- 新增 service 白名单，只有白名单中的 PM2 服务名允许执行 `start/stop/restart/logs`。
+
+主要改动：
+- `src/tool/service.mjs`
+  - 删除 target 映射解析与多服务聚合执行。
+  - 新增 `resolveWhitelistedServiceName`，严格校验服务名是否在白名单。
+  - `runServiceAction` 参数改为 `name`，并输出 `name/serviceName` 字段。
+- `src/config.mjs`
+  - 删除 `SERVICE_PM2_GATEWAY_NAME`、`SERVICE_PM2_BRIDGE_NAME`、`SERVICE_TARGETS` 解析。
+  - 新增 `SERVICE_WHITELIST`（逗号分隔），默认值为 `myclaw-gateway,myclaw-feishu`。
+- `src/gateway/server.mjs`
+  - service 路由入参从 `target` 改为 `name`，并调整错误提示。
+- `src/bridge/feishu.mjs`
+  - `/help` 示例改为 `<name>`。
+  - `/service` 解析和 usage 提示改为 `<name>`。
+- `README.md`、`.env.example`
+  - 同步更新环境变量说明、请求示例、飞书命令示例与默认配置。
+
+涉及文件：
+- .env.example
+- README.md
+- src/bridge/feishu.mjs
+- src/config.mjs
+- src/gateway/server.mjs
+- src/tool/service.mjs
+
+验证记录：
+- node --check src/tool/service.mjs
+- node --check src/config.mjs
+- node --check src/gateway/server.mjs
+- node --check src/bridge/feishu.mjs
+- 结果：通过
+

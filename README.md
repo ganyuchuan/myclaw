@@ -14,7 +14,7 @@ This is a minimal Gateway-only MVP inspired by OpenClaw.
 - `copilot` method: call GitHub Copilot via `@github/copilot-sdk`
 - `git` method: run allowlisted git commands in the current working directory
 - `sql` method: use Copilot to translate NL to SQL and execute via local `sqlite3`
-- `service.*` methods: manage PM2 services (`list/start/stop/restart/logs`) with target mapping
+- `service.*` methods: manage PM2 services (`list/start/stop/restart/logs`) with service-name + whitelist
 - `skills.*` methods: Copilot Skills 目录管理（list/add/remove）
 - `mcp.*` methods: MCP 服务配置管理（list/add/remove，持久化到 `config/mcporter.json`）
 - `cron.*` methods: 定时任务子系统（持久化 JSON、最近唤醒调度）
@@ -200,9 +200,7 @@ curl http://127.0.0.1:18790/health
 - `SERVICE_WORK_DIR`: working directory for service tool (empty = process cwd)
 - `SERVICE_TIMEOUT_MS`: timeout for PM2 command (default `30000`)
 - `SERVICE_PM2_BIN`: PM2 executable name/path (default `pm2`)
-- `SERVICE_PM2_GATEWAY_NAME`: PM2 process name for gateway (default `myclaw-gateway`)
-- `SERVICE_PM2_BRIDGE_NAME`: PM2 process name for feishu bridge (default `myclaw-feishu`)
-- `SERVICE_TARGETS`: JSON target mapping for `/service <action> <target>` (e.g. `{"sync":["myclaw-sync-server"]}`)
+- `SERVICE_WHITELIST`: comma-separated PM2 service names allowed for `/service <action> <name>` (default `myclaw-gateway,myclaw-feishu`)
 - `CRON_ENABLED`: enable cron subsystem (`true`/`false`, default `true`)
 - `CRON_JOBS_FILE`: jobs persistence file path (default `data/cron-jobs.json`)
 - `CRON_JOB_TIMEOUT_MS`: per-job execution timeout (default `600000` = 10 min)
@@ -458,10 +456,11 @@ Response payload (example):
 - `service.restart`
 - `service.logs`
 
-默认 target：`gateway|bridge|all`。可通过 `SERVICE_TARGETS` 追加或覆盖，例如：
+`service.start|stop|restart|logs` 现在使用具体 PM2 服务名：`/service <action> <name>`。
+服务名必须存在于 `SERVICE_WHITELIST`，否则会拒绝执行。
 
 ```dotenv
-SERVICE_TARGETS={"gateway":["myclaw-gateway"],"bridge":["myclaw-feishu"],"all":["myclaw-feishu","myclaw-gateway"],"sync":["myclaw-sync-server"]}
+SERVICE_WHITELIST=myclaw-gateway,myclaw-feishu,myclaw-sync-server
 ```
 
 Prerequisites:
@@ -477,7 +476,7 @@ Request:
   "type": "req",
   "id": "6",
   "method": "service.restart",
-  "params": { "target": "all" }
+  "params": { "name": "myclaw-gateway" }
 }
 ```
 
@@ -495,9 +494,9 @@ Response payload (example):
 ```json
 {
   "ok": true,
-  "target": "all",
-  "serviceNames": ["myclaw-gateway", "myclaw-feishu"],
-  "output": "[myclaw-gateway] ...\n[myclaw-feishu] ..."
+  "name": "myclaw-gateway",
+  "serviceName": "myclaw-gateway",
+  "output": "[myclaw-gateway] ..."
 }
 ```
 
@@ -518,7 +517,7 @@ cd /Users/yuchuan/Desktop/myclaw
   "type": "req",
   "id": "svc-1",
   "method": "service.restart",
-  "params": { "target": "all" }
+  "params": { "name": "myclaw-gateway" }
 }
 ```
 
@@ -526,13 +525,11 @@ cd /Users/yuchuan/Desktop/myclaw
 
 ```bash
 /service list
-/service start gateway
-/service stop bridge
-/service restart gateway
-/service restart bridge
-/service restart all
-/service logs gateway 100
-/service restart sync
+/service start myclaw-gateway
+/service stop myclaw-feishu
+/service restart myclaw-gateway
+/service logs myclaw-gateway 100
+/service restart myclaw-sync-server
 ```
 
 ## Skills Tool (Copilot SDK)
@@ -583,7 +580,7 @@ Feishu bridge 通过 `config.copilot.enabled` 全局切换消息路由：
 - `COPILOT_ENABLED=false`：所有飞书消息走 `send` + `agent` 方法（LLM）
 - 飞书命令支持 `/sql <自然语言查询>`，通过 gateway `sql` 方法调用 Copilot 翻译 SQL 并执行本地 sqlite3
 - 飞书命令支持 `/git <args>`，通过 gateway `git` 方法在当前目录执行 allowlist 内 git 子命令
-- 飞书命令支持 `/service <list|start|stop|restart|logs> [target] [lines]`，通过 gateway `service.*` 调用 PM2 执行服务管理
+- 飞书命令支持 `/service <list|start|stop|restart|logs> [name] [lines]`，通过 gateway `service.*` 调用 PM2 执行服务管理
 - 当 `SERVICE_ENABLED=false` 时，`/help` 不显示任何 `/service` 项
 - 飞书命令支持 `/skills list|add|remove`，通过 gateway `skills.*` 管理 Copilot Skills 加载目录
 - 飞书命令支持 `/cron nl <自然语言>`，由 gateway `cron.nl` 调用 Copilot 解析后再执行 `cron.add|update|remove|run|list`

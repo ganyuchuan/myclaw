@@ -379,17 +379,17 @@ export function createGatewayServer(config, { cronScheduler } = {}) {
           }
 
           const action = String(frame.method.split(".")[1] ?? "").trim().toLowerCase();
-          const target = String(frame.params?.target ?? "").trim().toLowerCase();
+          const name = String(frame.params?.name ?? "").trim();
           const lines = frame.params?.lines;
 
-          if (action !== "list" && !target) {
-            socket.send(JSON.stringify(badRequest(frame.id, `service.${action} target is required`)));
+          if (action !== "list" && !name) {
+            socket.send(JSON.stringify(badRequest(frame.id, `service.${action} name is required`)));
             return;
           }
 
           const result = await runServiceAction({
             action,
-            target,
+            name,
             lines,
             config: config.service,
           });
