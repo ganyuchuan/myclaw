@@ -258,6 +258,88 @@
 - node --check src/index.mjs
 - node --check src/bridge/feishu.mjs
 - node --check src/config.mjs
+
+---
+
+## 2026-04-24
+
+### 10) Copilot 工具拦截 + 人工审批队列（wait/poll）
+
+变更目标：
+- 在 Copilot SDK `onPreToolUse` 中增加可配置工具拦截、上报、服务端决策与 wait/poll。
+- 支持服务端维护拦截状态（prompt/msg/entries）并提供人工审批接口。
+
+主要改动：
+- Copilot 客户端侧：
+  - 新增 `interceptTools` 匹配后上报 `/api/copilot/intercepts/pretool`。
+  - 服务端返回 `wait` 时进入 `/api/copilot/intercepts/decision` 轮询。
+  - 增加拦截链路关键日志（pretool send/decision、poll start/tick/resolved/timeout）。
+- Sync server 侧：
+  - 新增拦截 API：
+    - `GET /api/copilot/intercepts/state`
+    - `GET /api/copilot/intercepts/queue`
+    - `POST /api/copilot/intercepts/pretool`
+    - `GET /api/copilot/intercepts/decision`
+    - `POST /api/copilot/intercepts/decision`
+    - `POST /api/copilot/intercepts/event`
+  - 新增拦截状态聚合（total/running/waiting/prompt/msg/entries/tokens）。
+  - 新增队列过期逻辑与人工决策日志。
+
+涉及文件：
+- src/tool/copilot.mjs
+- src/sync/http-server.mjs
+- src/config.mjs
+- .env.example
+- README.md
+
+验证记录：
+- node --check src/tool/copilot.mjs
+- node --check src/sync/http-server.mjs
+- node --check src/config.mjs
+- 拦截链路 smoke test：pretool -> wait -> manual allow -> decision 查询通过
+
+---
+
+### 11) 轻量审批页面（Waiting 列表 + Allow/Deny）
+
+变更目标：
+- 提供一个最小可用审批页，直接操作现有拦截接口。
+
+主要改动：
+- 新增页面路由：`GET /intercepts/approve`
+- 页面能力：
+  - 展示 waiting 队列
+  - 手工触发 allow/deny
+  - 自动刷新（3s）
+  - 可输入 auth token 与 operator
+
+涉及文件：
+- src/sync/http-server.mjs
+
+验证记录：
+- 页面可访问，能拉取 waiting 列表并执行人工审批。
+
+---
+
+### 12) Sync Server 启动策略快照与 dotenv 初始化
+
+变更目标：
+- 启动时打印“当前生效策略快照”，用于快速定位环境变量是否生效。
+- 让 sync server 进程直接读取 `.env`。
+
+主要改动：
+- 启动日志新增：`[sync-server][intercept] policy snapshot ...`
+  - 输出解析后的 effective 策略
+  - 输出 envRaw（原始环境变量读取值）
+  - token 脱敏显示
+- 在 sync server 文件顶部加入 `dotenv.config()`。
+
+涉及文件：
+- src/sync/http-server.mjs
+
+验证记录：
+- node --check src/sync/http-server.mjs
+- 启动日志可见策略快照。
 - 结果：通过
 
 ---

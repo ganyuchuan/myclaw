@@ -189,6 +189,14 @@ curl http://127.0.0.1:18790/health
 - `COPILOT_ASK_BEFORE_DESTRUCTIVE`: ask before destructive tool calls (`true`/`false`, default `true`)
 - `COPILOT_DESTRUCTIVE_TOOLS`: comma-separated destructive tool list used by ask policy
 - `COPILOT_PERMISSION_REQUEST_MODE`: `auto|approve|deny|delegate` (default `auto`); use `delegate` when you want SDK runtime ask flow
+- `COPILOT_INTERCEPT_ENABLED`: enable intercept forwarding via `onPreToolUse` (`true`/`false`, default `false`)
+- `COPILOT_INTERCEPT_TOOLS`: comma-separated tool names that should be sent to intercept server before execution
+- `COPILOT_INTERCEPT_SERVER_URL`: intercept HTTP server base URL
+- `COPILOT_INTERCEPT_AUTH_TOKEN`: optional bearer token for intercept HTTP APIs
+- `COPILOT_INTERCEPT_TIMEOUT_MS`: timeout for each intercept HTTP request (default `5000`)
+- `COPILOT_INTERCEPT_FAIL_OPEN`: when intercept HTTP fails, allow tool execution (`true`) or deny (`false`, default)
+- `COPILOT_INTERCEPT_POLL_INTERVAL_MS`: polling interval for manual decision queue when server returns `wait` (default `1000`)
+- `COPILOT_INTERCEPT_MAX_WAIT_MS`: maximum local wait duration for manual decision polling (default `30000`)
 - `COPILOT_SKILLS_FILE`: persistence file for added copilot skill directories (default `data/copilot-skills.json`)
 - `GIT_ENABLED`: enable git tool (`true`/`false`, default `true`)
 - `GIT_WORK_DIR`: working directory for git tool (empty = process cwd)
@@ -214,6 +222,14 @@ curl http://127.0.0.1:18790/health
 - `SYNC_NODE_ID`: node identity written to synced records (default `myclaw-local`)
 - `SYNC_PORT`: sync server port (default `18790`)
 - `SYNC_DB_FILE`: sync server persistence file (default `data/cron-jobs-sync.json`)
+- `SYNC_INTERCEPT_AUTH_TOKEN`: optional bearer token required by `/api/copilot/intercepts/*`
+- `SYNC_INTERCEPT_DEFAULT_DECISION`: default pretool decision (`allow|deny|wait`, default `allow`)
+- `SYNC_INTERCEPT_MANUAL_QUEUE_ENABLED`: force manual queue mode for configured tools (`true`/`false`, default `false`)
+- `SYNC_INTERCEPT_MANUAL_QUEUE_TOOLS`: comma-separated tools that enter manual queue; empty means all intercepted tools
+- `SYNC_INTERCEPT_AUTO_ALLOW_TOOLS`: comma-separated tools auto-approved by server policy
+- `SYNC_INTERCEPT_AUTO_DENY_TOOLS`: comma-separated tools auto-denied by server policy
+- `SYNC_INTERCEPT_WAIT_TIMEOUT_MS`: server-side queue wait timeout before marking request expired (default `60000`)
+- `SYNC_INTERCEPT_POLL_AFTER_MS`: suggested poll interval returned by pretool API (default `1000`)
 
 OpenAI Responses example:
 

@@ -1,4 +1,5 @@
 import { CopilotClient, approveAll } from "@github/copilot-sdk";
+import crypto from "node:crypto";
 import path from "node:path";
 import { getSkillDirectoriesForSession } from "./skills.mjs";
 import { loadMcpServersForCopilot } from "./mcp.mjs";
@@ -175,6 +176,300 @@ function collectPathCandidates(toolArgs) {
   return candidates;
 }
 
+function toPositiveInt(value, fallback) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function normalizeDecision(value, fallback = "deny") {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (["allow", "deny", "ask", "wait", "waiting", "approved", "denied", "expired", "timeout"].includes(normalized)) {
+    return normalized;
+  }
+  return fallback;
+}
+
+function trimTrailingSlash(url) {
+  return String(url ?? "").trim().replace(/\/+$/, "");
+}
+
+function createInterceptRequestId(input) {
+  const candidates = [
+    input?.requestId,
+    input?.permissionRequestId,
+    input?.toolCallId,
+    input?.id,
+  ];
+  for (const candidate of candidates) {
+    const normalized = String(candidate ?? "").trim();
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return `perm_${crypto.randomUUID()}`;
+}
+
+function truncateString(value, maxLength = 240) {
+  const text = String(value ?? "").trim();
+  if (!text) {
+    return "";
+  }
+  if (text.length <= maxLength) {
+    return text;
+  }
+  return `${text.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
+function collectHumanReadableHint(toolName, toolArgs) {
+  const paths = collectPathCandidates(toolArgs).slice(0, 2).join(", ");
+  if (paths) {
+    return `Run ${toolName} with ${paths}`;
+  }
+
+  const serialized = truncateString(JSON.stringify(toolArgs ?? {}), 120);
+  if (serialized) {
+    return `Run ${toolName} with args ${serialized}`;
+  }
+
+  return `Run ${toolName}`;
+}
+
+function safeCloneToolArgs(toolArgs) {
+  if (!toolArgs || typeof toolArgs !== "object") {
+    return toolArgs ?? null;
+  }
+
+  const sensitive = ["token", "secret", "password", "apiKey", "apikey", "authorization", "auth"];
+  const walk = (value) => {
+    if (value === null || value === undefined) {
+      return value ?? null;
+    }
+
+    if (typeof value === "string") {
+      return value.length > 500 ? `${value.slice(0, 497)}...` : value;
+    }
+
+    if (Array.isArray(value)) {
+      return value.slice(0, 20).map((item) => walk(item));
+    }
+
+    if (typeof value === "object") {
+      const result = {};
+      for (const [key, nested] of Object.entries(value)) {
+        const lowered = String(key ?? "").toLowerCase();
+        if (sensitive.some((item) => lowered.includes(item.toLowerCase()))) {
+          result[key] = "***";
+        } else {
+          result[key] = walk(nested);
+        }
+      }
+      return result;
+    }
+
+    return value;
+  };
+
+  return walk(toolArgs);
+}
+
+async function fetchJsonWithTimeout(url, { method = "GET", headers = {}, body, timeoutMs = 5000 } = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), toPositiveInt(timeoutMs, 5000));
+  try {
+    const response = await fetch(url, {
+      method,
+      headers,
+      body,
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(`http ${response.status}: ${String(payload?.error ?? response.statusText)}`);
+    }
+    return payload;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function mapInterceptDecisionToPermission(result, fallbackReason) {
+  const decision = normalizeDecision(result?.decision, "deny");
+  const reason = String(result?.reason ?? fallbackReason ?? "intercept decision").trim() || "intercept decision";
+
+  if (decision === "allow" || decision === "approved") {
+    return {
+      permissionDecision: "allow",
+      permissionDecisionReason: reason,
+    };
+  }
+
+  if (decision === "ask") {
+    return {
+      permissionDecision: "ask",
+      permissionDecisionReason: reason,
+    };
+  }
+
+  return {
+    permissionDecision: "deny",
+    permissionDecisionReason: reason,
+  };
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+}
+
+function shortId(value) {
+  const text = String(value ?? "").trim();
+  if (!text) {
+    return "-";
+  }
+  return text.length <= 14 ? text : `${text.slice(0, 6)}...${text.slice(-4)}`;
+}
+
+async function pollInterceptDecision({
+  interceptServerUrl,
+  interceptAuthToken,
+  requestId,
+  interceptTimeoutMs,
+  interceptPollIntervalMs,
+  interceptMaxWaitMs,
+}) {
+  const startedAt = Date.now();
+  let attempts = 0;
+  const headers = {
+    Accept: "application/json",
+  };
+
+  if (interceptAuthToken) {
+    headers.Authorization = `Bearer ${interceptAuthToken}`;
+  }
+
+  console.log(
+    `[copilot-sdk][intercept] poll start requestId=${shortId(requestId)} intervalMs=${interceptPollIntervalMs} maxWaitMs=${interceptMaxWaitMs}`,
+  );
+
+  while (Date.now() - startedAt < interceptMaxWaitMs) {
+    attempts += 1;
+    const params = new URLSearchParams({ id: requestId });
+    const payload = await fetchJsonWithTimeout(
+      `${interceptServerUrl}/api/copilot/intercepts/decision?${params.toString()}`,
+      {
+        method: "GET",
+        headers,
+        timeoutMs: interceptTimeoutMs,
+      },
+    );
+
+    const status = normalizeDecision(payload?.status, "waiting");
+    const decision = normalizeDecision(payload?.decision, "wait");
+    if (attempts === 1 || attempts % 5 === 0 || status !== "waiting") {
+      console.log(
+        `[copilot-sdk][intercept] poll tick requestId=${shortId(requestId)} attempt=${attempts} status=${status} decision=${decision}`,
+      );
+    }
+
+    if (["allow", "approved"].includes(decision) || status === "approved") {
+      console.log(
+        `[copilot-sdk][intercept] poll resolved allow requestId=${shortId(requestId)} attempts=${attempts} elapsedMs=${Date.now() - startedAt}`,
+      );
+      return {
+        decision: "allow",
+        reason: payload?.reason || "approved by intercept server",
+      };
+    }
+
+    if (["deny", "denied", "expired", "timeout"].includes(decision) || ["denied", "expired", "timeout"].includes(status)) {
+      console.log(
+        `[copilot-sdk][intercept] poll resolved deny requestId=${shortId(requestId)} attempts=${attempts} status=${status} elapsedMs=${Date.now() - startedAt}`,
+      );
+      return {
+        decision: "deny",
+        reason: payload?.reason || `intercept ${status}`,
+      };
+    }
+
+    await sleep(interceptPollIntervalMs);
+  }
+
+  console.warn(
+    `[copilot-sdk][intercept] poll timeout requestId=${shortId(requestId)} attempts=${attempts} elapsedMs=${Date.now() - startedAt}`,
+  );
+
+  return {
+    decision: "deny",
+    reason: `intercept decision timeout after ${interceptMaxWaitMs}ms`,
+  };
+}
+
+async function requestInterceptDecision({ input, toolName, config, workDir }) {
+  const interceptServerUrl = trimTrailingSlash(config.interceptServerUrl);
+  const interceptAuthToken = String(config.interceptAuthToken ?? "").trim();
+  const interceptTimeoutMs = toPositiveInt(config.interceptTimeoutMs, 5000);
+  const interceptPollIntervalMs = toPositiveInt(config.interceptPollIntervalMs, 1000);
+  const interceptMaxWaitMs = toPositiveInt(config.interceptMaxWaitMs, 30000);
+  const requestId = createInterceptRequestId(input);
+
+  const headers = {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+  };
+  if (interceptAuthToken) {
+    headers.Authorization = `Bearer ${interceptAuthToken}`;
+  }
+
+  console.log(
+    `[copilot-sdk][intercept] pretool send requestId=${shortId(requestId)} tool=${toolName} server=${interceptServerUrl}`,
+  );
+
+  const payload = await fetchJsonWithTimeout(`${interceptServerUrl}/api/copilot/intercepts/pretool`, {
+    method: "POST",
+    headers,
+    timeoutMs: interceptTimeoutMs,
+    body: JSON.stringify({
+      request: {
+        id: requestId,
+        tool: toolName,
+        hint: collectHumanReadableHint(toolName, input?.toolArgs),
+        msg: `Intercepted tool ${toolName}`,
+        sessionId: String(input?.sessionId ?? "").trim() || null,
+        workDir,
+        input: {
+          toolName,
+          toolArgs: safeCloneToolArgs(input?.toolArgs),
+          metadata: safeCloneToolArgs(input?.metadata),
+        },
+        ts: Date.now(),
+      },
+    }),
+  });
+
+  const decision = normalizeDecision(payload?.decision, "deny");
+  console.log(
+    `[copilot-sdk][intercept] pretool decision requestId=${shortId(requestId)} tool=${toolName} decision=${decision}`,
+  );
+  if (decision !== "wait") {
+    return {
+      decision,
+      reason: payload?.reason || payload?.msg || "intercept decision",
+    };
+  }
+
+  console.log(
+    `[copilot-sdk][intercept] pretool queued requestId=${shortId(requestId)} tool=${toolName} entering=poll`,
+  );
+
+  return pollInterceptDecision({
+    interceptServerUrl,
+    interceptAuthToken,
+    requestId,
+    interceptTimeoutMs,
+    interceptPollIntervalMs,
+    interceptMaxWaitMs,
+  });
+}
+
 function buildCopilotHooks(config) {
   if (!config?.hookEnabled) {
     return undefined;
@@ -184,6 +479,9 @@ function buildCopilotHooks(config) {
   const blockedTools = normalizeSet(config.blockedTools, []);
   const restrictedDirTools = normalizeSet(config.restrictedDirTools, DEFAULT_RESTRICTED_DIR_TOOLS);
   const destructiveTools = normalizeSet(config.destructiveTools, DEFAULT_DESTRUCTIVE_TOOLS);
+  const interceptTools = normalizeSet(config.interceptTools, []);
+  const interceptServerUrl = trimTrailingSlash(config.interceptServerUrl);
+  const interceptEnabled = Boolean(config.interceptEnabled && interceptServerUrl && interceptTools.size > 0);
   const allowedDirs = (Array.isArray(config.allowedDirs) ? config.allowedDirs : [])
     .map((item) => String(item ?? "").trim())
     .filter(Boolean)
@@ -194,6 +492,39 @@ function buildCopilotHooks(config) {
       const toolName = String(input?.toolName ?? "").trim().toLowerCase();
       if (!toolName) {
         return null;
+      }
+
+      console.log(`[copilot-sdk][intercept] onPreToolUse will match tool=${toolName}`);
+
+      if (interceptEnabled && interceptTools.has(toolName)) {
+        try {
+          console.log(`[copilot-sdk][intercept] onPreToolUse matched tool=${toolName}`);
+          const interceptResult = await requestInterceptDecision({
+            input,
+            toolName,
+            config,
+            workDir,
+          });
+          const permission = mapInterceptDecisionToPermission(interceptResult, `tool ${toolName} intercepted`);
+          console.log(
+            `[copilot-sdk][intercept] onPreToolUse resolved tool=${toolName} permission=${permission.permissionDecision}`,
+          );
+          return permission;
+        } catch (error) {
+          const reason = `intercept request failed: ${String(error?.message ?? error)}`;
+          console.warn(`[copilot-sdk][intercept] onPreToolUse failed tool=${toolName} reason=${reason}`);
+          if (config.interceptFailOpen) {
+            console.warn(`[copilot-sdk][intercept] fail-open allow tool=${toolName}`);
+            return {
+              permissionDecision: "allow",
+              permissionDecisionReason: `${reason}; fail-open enabled`,
+            };
+          }
+          return {
+            permissionDecision: "deny",
+            permissionDecisionReason: reason,
+          };
+        }
       }
 
       if (blockedTools.has(toolName)) {
