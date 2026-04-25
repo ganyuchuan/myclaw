@@ -1092,3 +1092,27 @@
 - node --check src/config.mjs
 - 结果：通过
 
+---
+
+## 2026-04-25
+
+### 31) 拦截审批页面外置为独立 HTML，并由 Sync Server 加载
+
+关联提交：本次提交
+
+变更目标：
+- 将 `renderInterceptApprovalPage` 的内嵌模板迁移到独立 HTML 文件，便于后续单独维护页面样式与脚本。
+
+主要改动：
+- 新增审批页面文件：`src/sync/intercept-approval.html`。
+- `src/sync/http-server.mjs` 中 `renderInterceptApprovalPage` 改为从文件读取页面内容并返回。
+- 增加简单缓存与读取失败兜底页面，避免文件读取异常导致路由崩溃。
+
+涉及文件：
+- src/sync/http-server.mjs
+- src/sync/intercept-approval.html
+
+验证记录：
+- node --check src/sync/http-server.mjs
+- 结果：通过
+
