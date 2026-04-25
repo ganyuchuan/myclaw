@@ -97,7 +97,7 @@
         <h1 class="title">Intercept Waiting Approval</h1>
         <div class="row">
           <label>Auth Token <input id="token" type="password" placeholder="optional" /></label>
-          <label>Operator <input id="operator" value="web-ui" /></label>
+          <label>Decided By <input id="decidedBy" value="web-ui" /></label>
           <button id="refresh" class="primary">Refresh</button>
           <button id="auto">Auto 3s: ON</button>
         </div>
@@ -114,7 +114,7 @@
     <script>
       const $ = (id) => document.getElementById(id);
       const tokenInput = $("token");
-      const operatorInput = $("operator");
+      const decidedByInput = $("decidedBy");
       const statusEl = $("status");
       const listEl = $("list");
       const summaryEl = $("summary");
@@ -152,14 +152,14 @@
       }
 
       async function decide(id, decision) {
-        const operator = String(operatorInput.value || "").trim() || "web-ui";
+        const decidedBy = String(decidedByInput.value || "").trim() || "web-ui";
         await fetchJson("/api/copilot/intercepts/decision", {
           method: "POST",
           body: JSON.stringify({
             id,
             decision,
-            operator,
-            reason: "manual " + decision + " from web ui",
+            decidedBy,
+            reason: "manual " + decision + " from " + decidedBy,
           }),
         });
         await refresh();

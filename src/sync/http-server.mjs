@@ -602,7 +602,7 @@ const server = createServer(async (req, res) => {
         item.status = finalDecision === "allow" ? "approved" : "denied";
         item.decision = finalDecision;
         item.reason = String(body?.reason ?? "").trim() || `manual ${finalDecision}`;
-        item.decidedBy = String(body?.operator ?? "").trim() || "manual";
+        item.decidedBy = String(body?.decidedBy ?? body?.operator ?? "").trim() || "manual";
         item.decidedAtMs = now;
         item.updatedAtMs = now;
 
