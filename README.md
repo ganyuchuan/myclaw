@@ -523,8 +523,9 @@ Response payload (example):
 
 ```bash
 cd /Users/yuchuan/Desktop/myclaw
-./node_modules/.bin/pm2 start npm --name myclaw-gateway -- run dev
+./node_modules/.bin/pm2 start npm --name myclaw-gateway -- run start
 ./node_modules/.bin/pm2 start npm --name myclaw-feishu -- run bridge:feishu
+./node_modules/.bin/pm2 start npm --name myclaw-server -- run sync-server
 ./node_modules/.bin/pm2 ls
 ```
 ### 2. 测试远程重启
