@@ -73,7 +73,7 @@ printf '%s\n' '{"type":"req","id":"1","method":"connect","params":{"auth":{"toke
 
 - 其他常用提示：
   - 使用 `wss://` 连接安全 WebSocket；若自签名证书可能需要额外参数或临时信任证书（这取决于本地环境）。
-  - 若想脚本化或自动重连/超时，考虑用 `websocket-as-promised` / `ws` 等库写小脚本（仓库已有 gateway-client.mjs 可直接复用）。
+  - 若想脚本化或自动重连/超时，考虑用 `websocket-as-promised` / `ws` 等库写小脚本（仓库已有 gateway-client.ts 可直接复用）。
 
 
 ## Source Archive 安装与启动（无 Docker）
@@ -389,13 +389,13 @@ COPILOT_PERMISSION_REQUEST_MODE=delegate
 1. `COPILOT_WORK_DIR`：会话“工作根目录”  
   - 用途：告诉 Copilot SDK 当前会话默认在哪个目录下运行。  
   - 在代码里会传给 `workingDirectory`，影响相对路径解析、会话上下文、以及你当前工程默认操作范围。  
-  - 参考实现： copilot.mjs, config.mjs
+  - 参考实现： copilot.ts, config.ts
 
 2. `COPILOT_ALLOWED_DIRS`：Hook 的“访问白名单目录”  
   - 用途：在 `onPreToolUse` 里做二次权限校验，工具访问路径不在这些目录内就拒绝。  
   - 这是权限策略层，不是工作目录本身。  
   - 为空时通常表示不启用目录限制。  
-  - 参考实现： copilot.mjs, README.md
+  - 参考实现： copilot.ts, README.md
 
 简单理解：
 - `COPILOT_WORK_DIR` = 默认从哪里开始工作  

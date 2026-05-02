@@ -210,6 +210,73 @@ function ensureStoreShape(raw) {
   return { jobs, runs, intercepts };
 }
 
+type InterceptRequestLike = {
+  id?: string;
+};
+
+type InterceptPretoolRequest = {
+  id?: string;
+  tool?: string;
+  hint?: string;
+  msg?: string;
+  input?: Record<string, unknown> | null;
+  sessionId?: string;
+  workDir?: string;
+};
+
+type InterceptPretoolBody = {
+  request?: InterceptPretoolRequest;
+};
+
+type InterceptDecisionBody = {
+  id?: string;
+  decision?: string;
+  reason?: string;
+  decidedBy?: string;
+  operator?: string;
+};
+
+type InterceptEventPayload = {
+  msg?: string;
+  entry?: string;
+  prompt?: {
+    id?: string;
+    tool?: string;
+    hint?: string;
+  };
+  entries?: string[];
+  state?: {
+    total?: number | string;
+    running?: number | string;
+    waiting?: number | string;
+    completed?: boolean;
+  };
+  toolCall?: Record<string, unknown>;
+  tokens?: number | string;
+  tokenEstimate?: {
+    sessionId?: string;
+    promptTokens?: number | string;
+    outputTokens?: number | string;
+    totalTokens?: number | string;
+    promptPreview?: string;
+    outputPreview?: string;
+    estimatedAtMs?: number | string;
+  };
+  completed?: boolean;
+};
+
+type InterceptEventBody = {
+  event?: InterceptEventPayload;
+};
+
+type JobUpsertBody = {
+  job?: Record<string, unknown>;
+};
+
+type RunAppendBody = {
+  run?: Record<string, unknown>;
+};
+
 function loadStore() {
   try {
     const raw = fs.readFileSync(dbFile, "utf8");
@@ -262,7 +329,7 @@ function notFound(res) {
   json(res, 404, { error: "not_found" });
 }
 
-function parseBody(req) {
+function parseBody<T extends Record<string, unknown> = Record<string, unknown>>(req): Promise<T> {
   return new Promise((resolve, reject) => {
     let raw = "";
     req.on("data", (chunk) => {
@@ -273,11 +340,11 @@ function parseBody(req) {
     });
     req.on("end", () => {
       if (!raw.trim()) {
-        resolve({});
+        resolve({} as T);
         return;
       }
       try {
-        resolve(JSON.parse(raw));
+        resolve(JSON.parse(raw) as T);
       } catch {
         reject(new Error("invalid json body"));
       }
@@ -475,7 +542,8 @@ const server = createServer(async (req, res) => {
         const statusFilter = String(url.searchParams.get("status") ?? "").trim().toLowerCase();
         const limit = toInt(url.searchParams.get("limit"), 100);
         const store = loadStore();
-        const items = Object.values(store.intercepts.requests)
+        const requestValues = Object.values(store.intercepts.requests as Record<string, InterceptRequestLike>);
+        const items = requestValues
           .map((item) => maybeExpireRequest(store.intercepts, item?.id))
           .filter(Boolean)
           .filter((item) => !statusFilter || String(item.status ?? "").toLowerCase() === statusFilter)
@@ -524,7 +592,7 @@ const server = createServer(async (req, res) => {
       }
 
       if (req.method === "POST" && pathname === "/api/copilot/intercepts/pretool") {
-        const body = await parseBody(req);
+        const body = await parseBody<InterceptPretoolBody>(req);
         const request = body?.request;
         if (!request || typeof request !== "object") {
           return json(res, 400, { error: "invalid request payload" });
@@ -652,7 +720,7 @@ const server = createServer(async (req, res) => {
       }
 
       if (req.method === "POST" && pathname === "/api/copilot/intercepts/decision") {
-        const body = await parseBody(req);
+        const body = await parseBody<InterceptDecisionBody>(req);
         const id = String(body?.id ?? "").trim();
         const decision = normalizeDecision(body?.decision, "deny");
         if (!id) {
@@ -702,7 +770,7 @@ const server = createServer(async (req, res) => {
       }
 
       if (req.method === "POST" && pathname === "/api/copilot/intercepts/event") {
-        const body = await parseBody(req);
+        const body = await parseBody<InterceptEventBody>(req);
         const event = body?.event;
         if (!event || typeof event !== "object") {
           return json(res, 400, { error: "invalid event payload" });
@@ -806,7 +874,7 @@ const server = createServer(async (req, res) => {
 
     if (req.method === "PUT" && pathname.startsWith("/api/jobs/")) {
       const id = decodeURIComponent(pathname.slice("/api/jobs/".length));
-      const body = await parseBody(req);
+      const body = await parseBody<JobUpsertBody>(req);
       const job = body?.job;
       if (!job || typeof job !== "object") {
         return json(res, 400, { error: "invalid job payload" });
@@ -842,7 +910,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && pathname === "/api/runs") {
-      const body = await parseBody(req);
+      const body = await parseBody<RunAppendBody>(req);
       const run = body?.run;
       if (!run || typeof run !== "object") {
         return json(res, 400, { error: "invalid run payload" });

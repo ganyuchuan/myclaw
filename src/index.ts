@@ -1,10 +1,10 @@
-import { config } from "./config.mjs";
-import { createGatewayServer } from "./gateway/server.mjs";
-import { createCronScheduler } from "./cron/scheduler.mjs";
+import { config } from "./config.js";
+import { createGatewayServer } from "./gateway/server.js";
+import { createCronScheduler } from "./cron/scheduler.js";
 import * as Lark from "@larksuiteoapi/node-sdk";
-import { runCopilotWithSharedSession, stopCopilotClient } from "./tool/copilot.mjs";
-import { createSyncClient } from "./sync/client.mjs";
-import { looksLikeMarkdown } from "./bridge/reply-format.mjs";
+import { runCopilotWithSharedSession, stopCopilotClient } from "./tool/copilot.js";
+import { createSyncClient } from "./sync/client.js";
+import { looksLikeMarkdown } from "./bridge/reply-format.js";
 
 function normalizeFeishuDomain(domain) {
   if (domain === "lark") {

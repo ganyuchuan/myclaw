@@ -1189,3 +1189,81 @@
 - node --check src/sync/http-server.mjs
 - 结果：通过
 
+
+---
+
+## 2026-05-02
+
+### 33) 启动 src 目录 TypeScript 迁移（仅核心代码）
+
+关联提交：本次提交
+
+变更目标：
+- 将 `src/` 下核心业务代码从 `.mjs` 迁移为 `.ts`。
+- 保持 Node ESM 运行形态，产物输出到 `dist/`。
+
+主要改动：
+- 新增 `tsconfig.json`：
+  - `module/moduleResolution` 使用 `NodeNext`
+  - 输出目录 `dist/`
+  - 迁移初期使用 `build --noCheck`，先保证可编译可运行
+- `src/` 下 18 个 `.mjs` 文件全部重命名为 `.ts`。
+- 修正所有内部相对导入后缀：`.mjs` -> `.js`（适配 NodeNext 产物运行）。
+- 更新 `package.json`：
+  - `main` 切到 `dist/index.js`
+  - 新增 `build` / `typecheck` 脚本
+  - `start` / `bridge:feishu` / `sync-server` 改为运行 `dist/*`
+  - 新增 `postbuild`，复制 `src/sync/intercept-approval.html` 到 `dist/sync/`
+- 更新文档中源码后缀示例（README 中 `.mjs` -> `.ts`）。
+
+涉及文件：
+- tsconfig.json
+- package.json
+- src/**/*.ts（由原 src/**/*.mjs 迁移）
+- README.md
+
+验证记录：
+- `npm run build`（`tsc --noCheck`）
+- `node --check dist/index.js`
+- `node --check dist/sync/http-server.js`
+- 结果：通过
+
+后续计划：
+- 逐步清理 `npm run typecheck` 的类型错误（当前迁移阶段已允许先编译后治理类型）。
+
+---
+
+### 34) TypeScript 类型收敛：清理 `as any`、替换宽松输入为 DTO
+
+关联提交：本次提交
+
+变更目标：
+- 在不改变业务行为的前提下，逐步将宽泛输入（`unknown`/隐式宽类型）替换为更明确的 request/response DTO。
+- 保持 `npm run typecheck` 持续通过。
+
+主要改动：
+- `src/tool/sql.ts`
+  - 新增 `SqlToolConfig`、`CopilotRuntimeConfig`、`RunSqlRequestInput`。
+  - 去除默认 `as any`，改为显式入参类型。
+- `src/tool/cron.ts`
+  - 新增 `PlanCronOperationInput`、`CronJobSnapshot`。
+  - 去除宽松索引签名与 `jobs?: unknown[]`。
+- `src/tool/git.ts`、`src/tool/service.ts`
+  - 新增工具配置 DTO（`GitToolConfig`、`ServiceToolConfig`）与对应入参类型。
+  - 去除默认 `as any`。
+- `src/bridge/feishu.ts`
+  - 新增 `TenantAccessTokenResponse`、`GatewayCopilotResponse`、`GatewayAgentResponse`、`ServiceRequestParams`、`WsClientCompat`。
+  - 将 service 请求参数与 gateway 返回值转为明确类型。
+- `src/model/client.ts`
+  - 新增 `ChatCompletionsResponse`、`ResponsesApiResponse`。
+  - 将 JSON 响应解析从泛化写法收敛为明确响应结构。
+- `src/sync/http-server.ts`
+  - 新增请求体 DTO：`InterceptPretoolBody`、`InterceptDecisionBody`、`InterceptEventBody`、`JobUpsertBody`、`RunAppendBody` 等。
+  - `parseBody` 升级为泛型函数，在各路由按 DTO 解析请求体。
+- `src/tool/copilot.ts`
+  - 新增 `InterceptDecisionPayload` 等响应结构类型。
+  - 拦截查询/决策链路统一按 DTO 消费返回数据。
+
+验证记录：
+- `npm run typecheck`
+- 结果：通过（`TYPECHECK_OK`）

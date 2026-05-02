@@ -1,25 +1,25 @@
 import { createServer } from "node:http";
 import crypto from "node:crypto";
 import { WebSocketServer } from "ws";
-import { generateAssistantReply } from "../model/client.mjs";
-import { resetSharedCopilotSessionId, runCopilotWithSharedSession } from "../tool/copilot.mjs";
-import { runGitCommand } from "../tool/git.mjs";
-import { planCronOperation } from "../tool/cron.mjs";
-import { runSqlRequest } from "../tool/sql.mjs";
-import { runServiceAction } from "../tool/service.mjs";
-import { addSkill, listSkills, removeSkill } from "../tool/skills.mjs";
-import { listMcpServers, removeMcpServer, upsertMcpServers } from "../tool/mcp.mjs";
+import { generateAssistantReply } from "../model/client.js";
+import { resetSharedCopilotSessionId, runCopilotWithSharedSession } from "../tool/copilot.js";
+import { runGitCommand } from "../tool/git.js";
+import { planCronOperation } from "../tool/cron.js";
+import { runSqlRequest } from "../tool/sql.js";
+import { runServiceAction } from "../tool/service.js";
+import { addSkill, listSkills, removeSkill } from "../tool/skills.js";
+import { listMcpServers, removeMcpServer, upsertMcpServers } from "../tool/mcp.js";
 import {
   isRequestFrame,
   makeError,
   makeHello,
   makeResponse,
   safeParseJson,
-} from "./protocol.mjs";
+} from "./protocol.js";
 
 const METHODS = ["connect", "send", "agent", "copilot", "git", "sql", "service.list", "service.start", "service.stop", "service.restart", "service.logs", "skills.list", "skills.add", "skills.remove", "mcp.list", "mcp.add", "mcp.remove", "cron.list", "cron.add", "cron.update", "cron.remove", "cron.run", "cron.nl", "health"];
 
-export function createGatewayServer(config, { cronScheduler } = {}) {
+export function createGatewayServer(config, { cronScheduler } = { cronScheduler: undefined }) {
   const sessions = new Map();
   const connections = new Map();
 
@@ -653,7 +653,7 @@ export function createGatewayServer(config, { cronScheduler } = {}) {
 
   return {
     listen() {
-      return new Promise((resolve) => {
+      return new Promise<void>((resolve) => {
         httpServer.listen(config.port, "127.0.0.1", () => resolve());
       });
     },
@@ -665,7 +665,7 @@ export function createGatewayServer(config, { cronScheduler } = {}) {
       for (const state of connections.values()) {
         state.socket.close();
       }
-      return new Promise((resolve, reject) => {
+      return new Promise<void>((resolve, reject) => {
         httpServer.close((error) => {
           if (error) {
             reject(error);

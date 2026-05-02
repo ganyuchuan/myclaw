@@ -1,7 +1,53 @@
 import path from "node:path";
-import { runCopilotWithSession } from "./copilot.mjs";
+import { runCopilotWithSession } from "./copilot.js";
 
-function buildSqlGenerationPrompt({ nlQuery, dbFile, schemaHint }) {
+type SqlToolConfig = {
+  workDir?: string;
+  dbFile?: string;
+  schemaHint?: string;
+};
+
+type CopilotRuntimeConfig = {
+  enabled?: boolean;
+  workDir?: string;
+  reuseSession?: boolean;
+  timeoutMs?: number;
+  model?: string;
+  allowAllTools?: boolean;
+  skillsFile?: string;
+  mcpConfigFile?: string;
+  hookEnabled?: boolean;
+  blockedTools?: string[];
+  restrictedDirTools?: string[];
+  allowedDirs?: string[];
+  askBeforeDestructive?: boolean;
+  destructiveTools?: string[];
+  permissionRequestMode?: "auto" | "approve" | "deny" | "delegate";
+  interceptEnabled?: boolean;
+  interceptTools?: string[];
+  interceptServerUrl?: string;
+  interceptAuthToken?: string;
+  interceptTimeoutMs?: number;
+  interceptFailOpen?: boolean;
+  interceptPollIntervalMs?: number;
+  interceptMaxWaitMs?: number;
+};
+
+type RunSqlRequestInput = {
+  text?: string;
+  config?: SqlToolConfig;
+  copilotConfig?: CopilotRuntimeConfig;
+};
+
+function buildSqlGenerationPrompt({
+  nlQuery,
+  dbFile,
+  schemaHint,
+}: {
+  nlQuery: string;
+  dbFile: string;
+  schemaHint: string;
+}) {
   const schemaBlock = schemaHint
     ? `已知 schema 信息（可能不完整）：\n${schemaHint}\n`
     : "";
@@ -19,7 +65,11 @@ function buildSqlGenerationPrompt({ nlQuery, dbFile, schemaHint }) {
     .join("\n");
 }
 
-export async function runSqlRequest({ text = "", config = {}, copilotConfig = {} }) {
+export async function runSqlRequest({
+  text = "",
+  config = {},
+  copilotConfig = {},
+}: RunSqlRequestInput) {
   const nlQuery = String(text ?? "").trim();
   if (!nlQuery) {
     throw new Error("sql.text is required");

@@ -1,6 +1,48 @@
-import { runCopilotWithSession } from "./copilot.mjs";
+import { runCopilotWithSession } from "./copilot.js";
 
 const ALLOWED_ACTIONS = new Set(["list", "add", "update", "remove", "run"]);
+
+type CopilotRuntimeConfig = {
+  enabled?: boolean;
+  reuseSession?: boolean;
+  timeoutMs?: number;
+  model?: string;
+  allowAllTools?: boolean;
+  workDir?: string;
+  skillsFile?: string;
+  mcpConfigFile?: string;
+  hookEnabled?: boolean;
+  blockedTools?: string[];
+  restrictedDirTools?: string[];
+  allowedDirs?: string[];
+  askBeforeDestructive?: boolean;
+  destructiveTools?: string[];
+  permissionRequestMode?: "auto" | "approve" | "deny" | "delegate";
+  interceptEnabled?: boolean;
+  interceptTools?: string[];
+  interceptServerUrl?: string;
+  interceptAuthToken?: string;
+  interceptTimeoutMs?: number;
+  interceptFailOpen?: boolean;
+  interceptPollIntervalMs?: number;
+  interceptMaxWaitMs?: number;
+};
+
+type CronJobSnapshot = {
+  id?: string;
+  name?: string;
+  enabled?: boolean;
+  schedule?: unknown;
+  payload?: {
+    action?: string;
+  };
+};
+
+type PlanCronOperationInput = {
+  text?: string;
+  copilotConfig?: CopilotRuntimeConfig;
+  jobs?: CronJobSnapshot[];
+};
 
 function summarizeJobs(jobs) {
   const list = Array.isArray(jobs) ? jobs : [];
@@ -76,7 +118,11 @@ function buildCronPlannerPrompt({ nlQuery, jobs }) {
   ].join("\n");
 }
 
-export async function planCronOperation({ text = "", copilotConfig = {}, jobs = [] }) {
+export async function planCronOperation({
+  text = "",
+  copilotConfig = {},
+  jobs = [],
+}: PlanCronOperationInput) {
   const nlQuery = String(text ?? "").trim();
   if (!nlQuery) {
     throw new Error("cron.nl.text is required");

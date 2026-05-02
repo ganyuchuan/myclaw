@@ -2,9 +2,34 @@ import * as Lark from "@larksuiteoapi/node-sdk";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { config } from "../config.mjs";
-import { createGatewayClient } from "./gateway-client.mjs";
-import { buildFeishuReplyPayload } from "./reply-format.mjs";
+import { config } from "../config.js";
+import { createGatewayClient } from "./gateway-client.js";
+import { buildFeishuReplyPayload } from "./reply-format.js";
+
+type TenantAccessTokenResponse = {
+  code?: number;
+  msg?: string;
+  expire?: number;
+  tenant_access_token?: string;
+};
+
+type GatewayCopilotResponse = {
+  output?: string;
+};
+
+type GatewayAgentResponse = {
+  reply?: string;
+};
+
+type WsClientCompat = {
+  stop?: () => void;
+  disconnect?: () => void;
+};
+
+type ServiceRequestParams = {
+  name?: string;
+  lines?: number;
+};
 
 function maskSecret(value) {
   if (!value) {
@@ -137,7 +162,7 @@ async function fetchTenantAccessToken(feishuCfg, forceRefresh = false) {
     body: JSON.stringify({ app_id: feishuCfg.appId, app_secret: feishuCfg.appSecret }),
   });
 
-  const payload = await response.json().catch(() => null);
+  const payload = await response.json().catch(() => null) as TenantAccessTokenResponse | null;
   if (!response.ok || payload?.code !== 0 || !payload?.tenant_access_token) {
     throw new Error(`failed to get tenant token: ${response.status} ${String(payload?.msg ?? "")}`);
   }
@@ -581,7 +606,7 @@ async function routeCommand({
       throw new Error(`usage: /service ${action} <name>${action === "logs" ? " [lines]" : ""}`);
     }
 
-    const params = action === "list" ? {} : { name };
+    const params: ServiceRequestParams = action === "list" ? {} : { name };
     if (action === "logs" && Number.isFinite(lines) && lines > 0) {
       params.lines = lines;
     }
@@ -1074,14 +1099,14 @@ dispatcher.register({
         console.log(
           `[feishu-bridge] copilot request from user=${senderOpenId} kind=${inbound.kind} prompt=${clipText(prompt, 120)}`,
         );
-        const copilotPayload = await runCopilotRequest(prompt);
+        const copilotPayload = await runCopilotRequest(prompt) as GatewayCopilotResponse;
         reply = String(copilotPayload?.output ?? "").trim();
       } else if (!reply) {
         if (inbound.kind === "image" || inbound.kind === "file") {
           reply = "当前仅 copilot 模式支持图片/文件处理，请启用 COPILOT_ENABLED=true 后重试。";
         } else {
           await gatewayClient.request("send", { sessionId, text });
-          const agentPayload = await gatewayClient.request("agent", { sessionId });
+          const agentPayload = await gatewayClient.request("agent", { sessionId }) as GatewayAgentResponse;
           reply = String(agentPayload?.reply ?? "").trim();
         }
       }
@@ -1130,10 +1155,11 @@ console.log("[feishu-bridge] websocket client started");
 const shutdown = () => {
   gatewayClient.close();
   try {
-    if (typeof wsClient.stop === "function") {
-      wsClient.stop();
-    } else if (typeof wsClient.disconnect === "function") {
-      wsClient.disconnect();
+    const maybeWsClient = wsClient as unknown as WsClientCompat;
+    if (typeof maybeWsClient.stop === "function") {
+      maybeWsClient.stop();
+    } else if (typeof maybeWsClient.disconnect === "function") {
+      maybeWsClient.disconnect();
     }
   } catch {
     // Ignore shutdown cleanup errors.

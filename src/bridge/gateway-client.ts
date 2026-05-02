@@ -68,7 +68,7 @@ export function createGatewayClient({
 
     socket = new WebSocket(gatewayUrl);
 
-    await new Promise((resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       const onOpen = () => {
         socket.off("error", onError);
         resolve();
@@ -91,7 +91,9 @@ export function createGatewayClient({
       if (frame.type === "event") {
         for (const handler of eventHandlers) {
           try {
-            handler(frame);
+            if (typeof handler === "function") {
+              handler(frame);
+            }
           } catch {
             // Ignore listener errors so they don't break socket handling.
           }

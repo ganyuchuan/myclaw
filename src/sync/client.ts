@@ -7,7 +7,7 @@ export function createSyncClient(config) {
   const timeoutMs = config.timeoutMs || 5000;
   const nodeId = config.nodeId || "myclaw-local";
 
-  async function request(method, path, body) {
+  async function request(method, path, body = undefined) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 

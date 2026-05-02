@@ -1,3 +1,15 @@
+type ChatCompletionsResponse = {
+  choices?: Array<{
+    message?: {
+      content?: string;
+    };
+  }>;
+};
+
+type ResponsesApiResponse = {
+  output_text?: string;
+};
+
 function parseBoolean(value, fallback = false) {
   if (typeof value === "boolean") {
     return value;
@@ -143,7 +155,7 @@ async function requestChatCompletions({ messages, llm }) {
     throw new Error("LLM returned success but no stream text could be parsed");
   }
 
-  const json = await response.json();
+    const json = await response.json() as ChatCompletionsResponse;
   const text = json?.choices?.[0]?.message?.content;
   if (typeof text === "string" && text.trim()) {
     return text;
@@ -171,7 +183,7 @@ async function requestResponses({ messages, llm }) {
     throw new Error(`LLM request failed (${response.status}): ${body.slice(0, 500)}`);
   }
 
-  const json = await response.json();
+    const json = await response.json() as ResponsesApiResponse;
   const outputText = json?.output_text;
   if (typeof outputText === "string" && outputText.trim()) {
     return outputText;

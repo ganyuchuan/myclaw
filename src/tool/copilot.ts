@@ -1,8 +1,8 @@
 import { CopilotClient, approveAll } from "@github/copilot-sdk";
 import crypto from "node:crypto";
 import path from "node:path";
-import { getSkillDirectoriesForSession } from "./skills.mjs";
-import { loadMcpServersForCopilot } from "./mcp.mjs";
+import { getSkillDirectoriesForSession } from "./skills.js";
+import { loadMcpServersForCopilot } from "./mcp.js";
 
 const DEFAULT_SHARED_SESSION_KEY = "__global__";
 
@@ -118,6 +118,17 @@ const DEFAULT_DESTRUCTIVE_TOOLS = [
   "shell",
   "bash",
 ];
+
+type HttpErrorPayload = {
+  error?: string;
+};
+
+type InterceptDecisionPayload = {
+  status?: string;
+  decision?: string;
+  reason?: string;
+  msg?: string;
+};
 
 function normalizeSet(values, fallback = []) {
   const source = Array.isArray(values) && values.length > 0 ? values : fallback;
@@ -338,7 +349,10 @@ function safeCloneToolArgs(toolArgs) {
   return walk(toolArgs);
 }
 
-async function fetchJsonWithTimeout(url, { method = "GET", headers = {}, body, timeoutMs = 5000 } = {}) {
+async function fetchJsonWithTimeout(
+  url,
+  { method = "GET", headers = {}, body = undefined, timeoutMs = 5000 } = {},
+): Promise<unknown> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), toPositiveInt(timeoutMs, 5000));
   try {
@@ -350,7 +364,8 @@ async function fetchJsonWithTimeout(url, { method = "GET", headers = {}, body, t
     });
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
-      throw new Error(`http ${response.status}: ${String(payload?.error ?? response.statusText)}`);
+      const typedPayload = payload as HttpErrorPayload | null;
+      throw new Error(`http ${response.status}: ${String(typedPayload?.error ?? response.statusText)}`);
     }
     return payload;
   } finally {
@@ -508,7 +523,7 @@ async function reportPostToolUseEvent({ input, invocation, config, workDir }) {
   }
 
   const requestId = createPostToolRequestId(input, invocation);
-  const headers = {
+  const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Accept: "application/json",
   };
@@ -558,7 +573,7 @@ async function reportSessionLifecycleEvent({ phase, input, invocation, config, w
   const interceptTimeoutMs = toPositiveInt(config.interceptTimeoutMs, 5000);
   const requestId = createPostToolRequestId(input, invocation);
   const sessionId = String(invocation?.sessionId ?? input?.sessionId ?? "").trim();
-  const headers = {
+  const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Accept: "application/json",
   };
@@ -617,7 +632,7 @@ async function reportSessionTokenEstimateEvent({
 
   const interceptAuthToken = String(config.interceptAuthToken ?? "").trim();
   const interceptTimeoutMs = toPositiveInt(config.interceptTimeoutMs, 5000);
-  const headers = {
+  const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Accept: "application/json",
   };
@@ -670,7 +685,7 @@ async function pollInterceptDecision({
 }) {
   const startedAt = Date.now();
   let attempts = 0;
-  const headers = {
+  const headers: Record<string, string> = {
     Accept: "application/json",
   };
 
@@ -692,7 +707,7 @@ async function pollInterceptDecision({
         headers,
         timeoutMs: interceptTimeoutMs,
       },
-    );
+    ) as InterceptDecisionPayload;
 
     const status = normalizeDecision(payload?.status, "waiting");
     const decision = normalizeDecision(payload?.decision, "wait");
@@ -743,7 +758,7 @@ async function requestInterceptDecision({ input, toolName, config, workDir }) {
   const interceptMaxWaitMs = toPositiveInt(config.interceptMaxWaitMs, 30000);
   const requestId = createInterceptRequestId(input);
 
-  const headers = {
+  const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Accept: "application/json",
   };
@@ -775,7 +790,7 @@ async function requestInterceptDecision({ input, toolName, config, workDir }) {
         ts: Date.now(),
       },
     }),
-  });
+  }) as InterceptDecisionPayload;
 
   const decision = normalizeDecision(payload?.decision, "deny");
   console.log(
@@ -963,7 +978,7 @@ async function buildSessionConfig(config) {
     mcpConfigFile: config.mcpConfigFile,
   });
 
-  const sessionConfig = {
+  const sessionConfig: any = {
     onPermissionRequest: resolvePermissionHandler(config),
     workingDirectory: config.workDir || process.cwd(),
     streaming: true,
@@ -1098,8 +1113,8 @@ export async function runCopilotWithSession({
   prompt,
   config,
   resumeSessionId = "",
-  onDelta,
-  onDone,
+  onDelta = undefined,
+  onDone = undefined,
 }) {
   const client = await ensureSdkClient(config);
   let effectiveResumeSessionId = resumeSessionId;
@@ -1208,7 +1223,13 @@ async function getOrCreateSharedSession(config, sessionKey) {
  * @param {object} options.config
  * @returns {Promise<{ output: string, sessionId: string }>}
  */
-export async function runCopilotWithSharedSession({ prompt, config, sessionKey = DEFAULT_SHARED_SESSION_KEY, onDelta, onDone }) {
+export async function runCopilotWithSharedSession({
+  prompt,
+  config,
+  sessionKey = DEFAULT_SHARED_SESSION_KEY,
+  onDelta = undefined,
+  onDone = undefined,
+}) {
   if (!config?.reuseSession) {
     return runCopilotWithSession({
       prompt,

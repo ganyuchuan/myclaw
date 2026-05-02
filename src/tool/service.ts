@@ -3,6 +3,20 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
+type ServiceToolConfig = {
+  pm2Bin?: string;
+  timeoutMs?: number;
+  workDir?: string;
+  whitelist?: string[];
+};
+
+type RunServiceActionInput = {
+  action?: string;
+  name?: string;
+  lines?: number;
+  config?: ServiceToolConfig;
+};
+
 function uniqueNonEmpty(list) {
   const result = [];
   const seen = new Set();
@@ -85,7 +99,12 @@ function buildServiceArgs(action, serviceName, lines) {
   return [action, serviceName];
 }
 
-export async function runServiceAction({ action = "", name = "", lines = 50, config = {} }) {
+export async function runServiceAction({
+  action = "",
+  name = "",
+  lines = 50,
+  config = {},
+}: RunServiceActionInput) {
   const normalizedAction = normalizeAction(action);
 
   const pm2Bin = String(config.pm2Bin ?? "pm2").trim() || "pm2";
@@ -133,7 +152,13 @@ export async function runServiceAction({ action = "", name = "", lines = 50, con
   };
 }
 
-export async function restartService({ name = "", config = {} }) {
+export async function restartService({
+  name = "",
+  config = {},
+}: {
+  name?: string;
+  config?: ServiceToolConfig;
+}) {
   return runServiceAction({
     action: "restart",
     name,

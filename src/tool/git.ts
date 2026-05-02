@@ -22,6 +22,18 @@ const DEFAULT_ALLOWED_COMMANDS = [
   "rev-parse",
 ];
 
+type GitToolConfig = {
+  allowedCommands?: string[];
+  workDir?: string;
+  timeoutMs?: number;
+};
+
+type RunGitCommandInput = {
+  command?: string;
+  args?: unknown[];
+  config?: GitToolConfig;
+};
+
 function parseArgsFromCommand(commandText) {
   const text = String(commandText ?? "").trim();
   if (!text) {
@@ -69,7 +81,7 @@ function findGitSubcommand(args) {
   return "";
 }
 
-export async function runGitCommand({ command = "", args, config = {} }) {
+export async function runGitCommand({ command = "", args, config = {} }: RunGitCommandInput) {
   const normalizedArgs = normalizeArgs({ command, args });
   if (normalizedArgs.length === 0) {
     throw new Error("git args are required");

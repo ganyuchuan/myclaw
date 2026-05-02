@@ -206,7 +206,9 @@ export function createCronScheduler(config) {
   const notifyCompletionListeners = async (event) => {
     for (const listener of completionListeners) {
       try {
-        await listener(event);
+        if (typeof listener === "function") {
+          await listener(event);
+        }
       } catch (error) {
         console.error(`[cron] completion listener failed: ${String(error?.message ?? error)}`);
       }
@@ -216,7 +218,9 @@ export function createCronScheduler(config) {
   const notifyJobChangeListeners = async (event) => {
     for (const listener of jobChangeListeners) {
       try {
-        await listener(event);
+        if (typeof listener === "function") {
+          await listener(event);
+        }
       } catch (error) {
         console.error(`[cron] job change listener failed: ${String(error?.message ?? error)}`);
       }

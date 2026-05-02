@@ -20,7 +20,7 @@ export function isRequestFrame(frame) {
   );
 }
 
-export function makeResponse(id, ok, payload, error) {
+export function makeResponse(id, ok, payload, error = undefined) {
   return {
     type: "res",
     id,
