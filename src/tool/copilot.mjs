@@ -12,6 +12,12 @@ let sdkClientCwd = "";
 let sharedSessions = new Map();
 let sharedCopilotSessionIds = new Map();
 let sharedSkillSignatures = new Map();
+const sessionLifecycleState = {
+  total: 0,
+  running: 0,
+  waiting: 0,
+  completed: false,
+};
 
 function normalizeSessionKey(sessionKey) {
   const normalized = String(sessionKey ?? "").trim();
@@ -220,6 +226,66 @@ function truncateString(value, maxLength = 240) {
   return `${text.slice(0, Math.max(0, maxLength - 3))}...`;
 }
 
+function estimateTextTokens(value) {
+  const text = String(value ?? "").trim();
+  if (!text) {
+    return 0;
+  }
+
+  const cjkChars = (text.match(/[\u3400-\u9FFF\uF900-\uFAFF]/g) || []).length;
+  const asciiChars = text.length - cjkChars;
+  const asciiTokens = Math.ceil(Math.max(0, asciiChars) / 4);
+  return Math.max(1, cjkChars + asciiTokens);
+}
+
+function estimateConversationTokens({ prompt, output, entries = [] }) {
+  const promptTokens = estimateTextTokens(prompt);
+  const outputTokens = estimateTextTokens(output);
+  const entryTokens = Array.isArray(entries)
+    ? entries.reduce((total, item) => total + estimateTextTokens(item), 0)
+    : 0;
+
+  // Prefer the explicit prompt and final output. Entries are used only as a fallback
+  // because they can overlap with prompt/output content depending on the hook payload.
+  const baseTokens = promptTokens + outputTokens;
+  if (baseTokens > 0) {
+    return baseTokens;
+  }
+
+  return entryTokens;
+}
+
+function estimateConversationTokenBreakdown({ prompt, output, entries = [] }) {
+  const promptText = String(prompt ?? "").trim();
+  const outputText = String(output ?? "").trim();
+  const promptTokens = estimateTextTokens(promptText);
+  const outputTokens = estimateTextTokens(outputText);
+  const totalTokens = promptTokens + outputTokens;
+
+  if (totalTokens > 0) {
+    return {
+      promptTokens,
+      outputTokens,
+      totalTokens,
+      promptPreview: truncateString(promptText, 160),
+      outputPreview: truncateString(outputText, 160),
+    };
+  }
+
+  const fallbackEntries = Array.isArray(entries)
+    ? entries.map((item) => String(item ?? "").trim()).filter(Boolean)
+    : [];
+  const fallbackText = fallbackEntries.join("\n");
+  const fallbackTokens = estimateConversationTokens({ prompt, output, entries });
+  return {
+    promptTokens: 0,
+    outputTokens: 0,
+    totalTokens: fallbackTokens,
+    promptPreview: "",
+    outputPreview: truncateString(fallbackText, 160),
+  };
+}
+
 function collectHumanReadableHint(toolName, toolArgs) {
   const paths = collectPathCandidates(toolArgs).slice(0, 2).join(", ");
   if (paths) {
@@ -336,6 +402,77 @@ function safeStringify(value, fallback = "{}") {
   }
 }
 
+function normalizeMessageEntry(value) {
+  if (typeof value === "string") {
+    return truncateString(value, 500);
+  }
+
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+
+  const role = String(value.role ?? "").trim();
+  const content = String(value.content ?? value.text ?? value.message ?? "").trim();
+  if (!content) {
+    return "";
+  }
+
+  return truncateString(role ? `${role}: ${content}` : content, 500);
+}
+
+function collectSessionEntries(input, invocation) {
+  const sourceArrays = [
+    input?.messages,
+    input?.session?.messages,
+    invocation?.messages,
+    invocation?.session?.messages,
+  ];
+
+  const result = [];
+  for (const source of sourceArrays) {
+    if (!Array.isArray(source)) {
+      continue;
+    }
+    for (const item of source) {
+      const normalized = normalizeMessageEntry(item);
+      if (normalized) {
+        result.push(normalized);
+      }
+    }
+  }
+
+  if (result.length === 0) {
+    const fallbackPrompt = String(input?.prompt ?? invocation?.prompt ?? "").trim();
+    if (fallbackPrompt) {
+      result.push(truncateString(fallbackPrompt, 500));
+    }
+  }
+
+  return result.slice(-50);
+}
+
+function snapshotLifecycleState() {
+  return {
+    total: sessionLifecycleState.total,
+    running: sessionLifecycleState.running,
+    waiting: sessionLifecycleState.waiting,
+    completed: sessionLifecycleState.completed,
+  };
+}
+
+function markSessionStart() {
+  sessionLifecycleState.total += 1;
+  sessionLifecycleState.running += 1;
+  sessionLifecycleState.completed = false;
+  return snapshotLifecycleState();
+}
+
+function markSessionEnd() {
+  sessionLifecycleState.running = Math.max(0, sessionLifecycleState.running - 1);
+  sessionLifecycleState.completed = true;
+  return snapshotLifecycleState();
+}
+
 function createPostToolRequestId(input, invocation) {
   const candidates = [
     input?.requestId,
@@ -403,6 +540,118 @@ async function reportPostToolUseEvent({ input, invocation, config, workDir }) {
           tool: toolName,
           args: safeArgs,
           result: safeResult,
+          ts: Date.now(),
+          workDir,
+        },
+      },
+    }),
+  });
+}
+
+async function reportSessionLifecycleEvent({ phase, input, invocation, config, workDir }) {
+  const interceptServerUrl = trimTrailingSlash(config.interceptServerUrl);
+  if (!config.interceptEnabled || !interceptServerUrl) {
+    return;
+  }
+
+  const interceptAuthToken = String(config.interceptAuthToken ?? "").trim();
+  const interceptTimeoutMs = toPositiveInt(config.interceptTimeoutMs, 5000);
+  const requestId = createPostToolRequestId(input, invocation);
+  const sessionId = String(invocation?.sessionId ?? input?.sessionId ?? "").trim();
+  const headers = {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+  };
+
+  if (interceptAuthToken) {
+    headers.Authorization = `Bearer ${interceptAuthToken}`;
+  }
+
+  const state = phase === "start" ? markSessionStart() : markSessionEnd();
+  const entries = collectSessionEntries(input, invocation);
+
+  await fetchJsonWithTimeout(`${interceptServerUrl}/api/copilot/intercepts/event`, {
+    method: "POST",
+    headers,
+    timeoutMs: interceptTimeoutMs,
+    body: JSON.stringify({
+      event: {
+        msg: `Session ${phase}: ${sessionId || shortId(requestId)}`,
+        entry: `Session ${phase}: ${sessionId || shortId(requestId)}`,
+        state,
+        entries,
+        prompt: {
+          id: sessionId || requestId,
+          tool: "session",
+          hint: `Copilot session ${phase}`,
+        },
+        session: {
+          id: sessionId,
+          phase,
+          ts: Date.now(),
+          workDir,
+        },
+      },
+    }),
+  });
+}
+
+async function reportSessionTokenEstimateEvent({
+  sessionId,
+  prompt,
+  output,
+  config,
+  workDir,
+  entries = [],
+}) {
+  const interceptServerUrl = trimTrailingSlash(config.interceptServerUrl);
+  if (!config.interceptEnabled || !interceptServerUrl) {
+    return;
+  }
+
+  const breakdown = estimateConversationTokenBreakdown({ prompt, output, entries });
+  const tokens = breakdown.totalTokens;
+  if (tokens <= 0) {
+    return;
+  }
+
+  const interceptAuthToken = String(config.interceptAuthToken ?? "").trim();
+  const interceptTimeoutMs = toPositiveInt(config.interceptTimeoutMs, 5000);
+  const headers = {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+  };
+
+  if (interceptAuthToken) {
+    headers.Authorization = `Bearer ${interceptAuthToken}`;
+  }
+
+  await fetchJsonWithTimeout(`${interceptServerUrl}/api/copilot/intercepts/event`, {
+    method: "POST",
+    headers,
+    timeoutMs: interceptTimeoutMs,
+    body: JSON.stringify({
+      event: {
+        msg: `Session tokens estimated: ${sessionId || "-"}`,
+        entry: `Session tokens estimated: ${sessionId || "-"} (${tokens})`,
+        tokens,
+        tokenEstimate: {
+          sessionId,
+          promptTokens: breakdown.promptTokens,
+          outputTokens: breakdown.outputTokens,
+          totalTokens: breakdown.totalTokens,
+          promptPreview: breakdown.promptPreview,
+          outputPreview: breakdown.outputPreview,
+          estimatedAtMs: Date.now(),
+        },
+        prompt: {
+          id: sessionId || `tokens_${crypto.randomUUID()}`,
+          tool: "session",
+          hint: `Estimated tokens for completed Copilot session: ${tokens}`,
+        },
+        session: {
+          id: sessionId,
+          phase: "token-estimate",
           ts: Date.now(),
           workDir,
         },
@@ -665,6 +914,42 @@ function buildCopilotHooks(config) {
 
       return null;
     },
+    onSessionStart: async (input, invocation) => {
+      const sessionId = String(invocation?.sessionId ?? input?.sessionId ?? "").trim() || "-";
+      console.log(`[copilot-sdk][session] start sessionId=${sessionId}`);
+      try {
+        await reportSessionLifecycleEvent({
+          phase: "start",
+          input,
+          invocation,
+          config,
+          workDir,
+        });
+      } catch (error) {
+        console.warn(
+          `[copilot-sdk][intercept] onSessionStart upload failed sessionId=${sessionId} reason=${String(error?.message ?? error)}`,
+        );
+      }
+      return null;
+    },
+    onSessionEnd: async (input, invocation) => {
+      const sessionId = String(invocation?.sessionId ?? input?.sessionId ?? "").trim() || "-";
+      console.log(`[copilot-sdk][session] end sessionId=${sessionId}`);
+      try {
+        await reportSessionLifecycleEvent({
+          phase: "end",
+          input,
+          invocation,
+          config,
+          workDir,
+        });
+      } catch (error) {
+        console.warn(
+          `[copilot-sdk][intercept] onSessionEnd upload failed sessionId=${sessionId} reason=${String(error?.message ?? error)}`,
+        );
+      }
+      return null;
+    },
   };
 }
 
@@ -828,13 +1113,30 @@ export async function runCopilotWithSession({
     });
 
     try {
-      return await runSessionPrompt({
+      const result = await runSessionPrompt({
         session,
         prompt,
         timeoutMs: config.timeoutMs,
         onDelta,
         onDone,
       });
+
+      try {
+        await reportSessionTokenEstimateEvent({
+          sessionId: result.sessionId,
+          prompt,
+          output: result.output,
+          config,
+          workDir: config.workDir || process.cwd(),
+          entries: [prompt, result.output],
+        });
+      } catch (error) {
+        console.warn(
+          `[copilot-sdk][intercept] token estimate upload failed sessionId=${result.sessionId} reason=${String(error?.message ?? error)}`,
+        );
+      }
+
+      return result;
     } catch (error) {
       if (!retried && isSessionNotFoundError(error)) {
         retried = true;
@@ -931,6 +1233,22 @@ export async function runCopilotWithSharedSession({ prompt, config, sessionKey =
           onDelta,
           onDone,
         });
+
+        try {
+          await reportSessionTokenEstimateEvent({
+            sessionId: result.sessionId,
+            prompt,
+            output: result.output,
+            config,
+            workDir: config.workDir || process.cwd(),
+            entries: [prompt, result.output],
+          });
+        } catch (error) {
+          console.warn(
+            `[copilot-sdk][intercept] token estimate upload failed sessionId=${result.sessionId} reason=${String(error?.message ?? error)}`,
+          );
+        }
+
         setSharedSessionIdForKey(key, result.sessionId);
         return result;
       } catch (error) {

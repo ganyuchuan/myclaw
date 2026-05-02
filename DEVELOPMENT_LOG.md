@@ -238,6 +238,43 @@
   - 新增 `COPILOT_REUSE_SESSION` 配置（默认开启）。
   - 会话复用逻辑下沉到工具层，统一使用共享 `sharedCopilotSessionId`。
   - gateway `copilot` 与 cron `copilot` 执行器都改为走同一共享 session 入口。
+
+  ---
+
+  ## 2026-05-02
+
+  ### 10) Copilot 会话状态同步与 Token 估算展示
+
+  关联提交：待提交
+
+  变更目标：
+  - 将 Copilot 会话生命周期状态同步到 sync server。
+  - 在每次 Copilot 响应完成后估算 token 消耗，并通过 event 上报。
+  - 在审批页和状态接口中展示最近一次 token 估算明细。
+
+  主要改动：
+  - `src/tool/copilot.mjs`
+    - 新增 `onSessionStart` / `onSessionEnd` 钩子，上报 session start/end 生命周期事件。
+    - 新增会话消息归一化与 entries 收集逻辑，用于同步最近会话内容。
+    - 新增 token 估算逻辑：按 prompt/output 文本近似估算 token。
+    - 在普通会话和共享会话路径中，均在拿到最终响应后通过 `POST /api/copilot/intercepts/event` 上报 token 估算结果。
+  - `src/sync/http-server.mjs`
+    - 拦截状态模型精简为 `total/running/waiting/completed` 主状态，由客户端 event 驱动更新。
+    - 支持通过 event 写入 `entries`、状态字段与 `last_token_estimate`。
+    - `GET /api/copilot/intercepts/state` 现返回最近一次 token 估算明细。
+  - `src/sync/intercept-approval.html`
+    - summary 区域新增 `tokens` 和 `tokens_today` 展示。
+    - 新增 `Latest Token Estimate` 区块，展示最近一次估算的 session、prompt/output/total token 和预览文本。
+
+  涉及文件：
+  - src/tool/copilot.mjs
+  - src/sync/http-server.mjs
+  - src/sync/intercept-approval.html
+
+  验证记录：
+  - node --check src/tool/copilot.mjs
+  - node --check src/sync/http-server.mjs
+  - 结果：通过
   - 新增调用日志，打印 `gh copilot` 实际参数、耗时、退出状态。
 - 飞书 Markdown 回发：
   - 新增 `FEISHU_REPLY_MARKDOWN` 配置（默认开启）。

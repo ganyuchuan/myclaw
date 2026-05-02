@@ -135,6 +135,7 @@ function makeDefaultInterceptState() {
     msg: "",
     entries: [],
     prompt: null,
+    last_token_estimate: null,
     tokens_day: dayKey(),
     last_completed_at_ms: 0,
   };
@@ -154,12 +155,25 @@ function ensureInterceptState(raw) {
     tokens: Number.isFinite(raw.tokens) ? raw.tokens : fallback.tokens,
     tokens_today: Number.isFinite(raw.tokens_today) ? raw.tokens_today : fallback.tokens_today,
     msg: String(raw.msg ?? fallback.msg),
-    entries: Array.isArray(raw.entries) ? raw.entries.slice(-8).map((item) => String(item ?? "")).filter(Boolean) : [],
+    entries: Array.isArray(raw.entries) ? raw.entries.slice(-50).map((item) => String(item ?? "")).filter(Boolean) : [],
     prompt: raw.prompt && typeof raw.prompt === "object"
       ? {
           id: String(raw.prompt.id ?? "").trim(),
           tool: String(raw.prompt.tool ?? "").trim(),
           hint: String(raw.prompt.hint ?? "").trim(),
+        }
+      : null,
+    last_token_estimate: raw.last_token_estimate && typeof raw.last_token_estimate === "object"
+      ? {
+          sessionId: String(raw.last_token_estimate.sessionId ?? "").trim(),
+          promptTokens: Number.isFinite(raw.last_token_estimate.promptTokens) ? raw.last_token_estimate.promptTokens : 0,
+          outputTokens: Number.isFinite(raw.last_token_estimate.outputTokens) ? raw.last_token_estimate.outputTokens : 0,
+          totalTokens: Number.isFinite(raw.last_token_estimate.totalTokens) ? raw.last_token_estimate.totalTokens : 0,
+          promptPreview: String(raw.last_token_estimate.promptPreview ?? ""),
+          outputPreview: String(raw.last_token_estimate.outputPreview ?? ""),
+          estimatedAtMs: Number.isFinite(raw.last_token_estimate.estimatedAtMs)
+            ? raw.last_token_estimate.estimatedAtMs
+            : 0,
         }
       : null,
     tokens_day: String(raw.tokens_day ?? fallback.tokens_day),
@@ -279,9 +293,20 @@ function appendEntry(state, text) {
   }
 
   state.entries.push(normalized);
-  if (state.entries.length > 8) {
-    state.entries = state.entries.slice(-8);
+  if (state.entries.length > 50) {
+    state.entries = state.entries.slice(-50);
   }
+}
+
+function replaceEntries(state, entries) {
+  if (!Array.isArray(entries)) {
+    return;
+  }
+
+  state.entries = entries
+    .map((item) => String(item ?? "").trim())
+    .filter(Boolean)
+    .slice(-50);
 }
 
 function decisionForStatus(status) {
@@ -304,11 +329,9 @@ function refreshTodayTokens(state) {
 }
 
 function updateStateCounters(intercepts) {
-  const requests = Object.values(intercepts.requests ?? {});
-  const waiting = requests.filter((item) => item?.status === "waiting").length;
-  const running = requests.filter((item) => item?.status === "running").length;
-  intercepts.state.waiting = waiting;
-  intercepts.state.running = running;
+  intercepts.state.total = Number.isFinite(intercepts.state.total) ? Math.max(0, intercepts.state.total) : 0;
+  intercepts.state.waiting = Number.isFinite(intercepts.state.waiting) ? Math.max(0, intercepts.state.waiting) : 0;
+  intercepts.state.running = Number.isFinite(intercepts.state.running) ? Math.max(0, intercepts.state.running) : 0;
 }
 
 function appendToolCall(intercepts, toolCall) {
@@ -409,6 +432,7 @@ function toPublicInterceptState(state) {
     msg: state.msg,
     entries: state.entries,
     prompt: state.prompt,
+    last_token_estimate: state.last_token_estimate,
   };
 }
 
@@ -540,7 +564,6 @@ const server = createServer(async (req, res) => {
             decidedAtMs: 0,
           };
           store.intercepts.requests[id] = item;
-          store.intercepts.state.total += 1;
           appendEntry(store.intercepts.state, `Intercepted: ${tool} (${id})`);
           console.log(`[sync-server][intercept] queued id=${id} tool=${tool} total=${store.intercepts.state.total}`);
         }
@@ -706,6 +729,31 @@ const server = createServer(async (req, res) => {
           };
         }
 
+        if (Array.isArray(event.entries)) {
+          replaceEntries(store.intercepts.state, event.entries);
+        }
+
+        if (event.state && typeof event.state === "object") {
+          const nextTotal = Number.parseInt(String(event.state.total ?? ""), 10);
+          if (Number.isFinite(nextTotal) && nextTotal >= 0) {
+            store.intercepts.state.total = nextTotal;
+          }
+
+          const nextRunning = Number.parseInt(String(event.state.running ?? ""), 10);
+          if (Number.isFinite(nextRunning) && nextRunning >= 0) {
+            store.intercepts.state.running = nextRunning;
+          }
+
+          const nextWaiting = Number.parseInt(String(event.state.waiting ?? ""), 10);
+          if (Number.isFinite(nextWaiting) && nextWaiting >= 0) {
+            store.intercepts.state.waiting = nextWaiting;
+          }
+
+          if (typeof event.state.completed === "boolean") {
+            store.intercepts.state.completed = event.state.completed;
+          }
+        }
+
         if (event.toolCall && typeof event.toolCall === "object") {
           appendToolCall(store.intercepts, event.toolCall);
         }
@@ -714,6 +762,18 @@ const server = createServer(async (req, res) => {
         if (Number.isFinite(tokens) && tokens > 0) {
           store.intercepts.state.tokens += tokens;
           store.intercepts.state.tokens_today += tokens;
+        }
+
+        if (event.tokenEstimate && typeof event.tokenEstimate === "object") {
+          store.intercepts.state.last_token_estimate = {
+            sessionId: String(event.tokenEstimate.sessionId ?? "").trim(),
+            promptTokens: Number.parseInt(String(event.tokenEstimate.promptTokens ?? "0"), 10) || 0,
+            outputTokens: Number.parseInt(String(event.tokenEstimate.outputTokens ?? "0"), 10) || 0,
+            totalTokens: Number.parseInt(String(event.tokenEstimate.totalTokens ?? tokens ?? "0"), 10) || 0,
+            promptPreview: String(event.tokenEstimate.promptPreview ?? ""),
+            outputPreview: String(event.tokenEstimate.outputPreview ?? ""),
+            estimatedAtMs: Number.parseInt(String(event.tokenEstimate.estimatedAtMs ?? Date.now()), 10) || Date.now(),
+          };
         }
 
         if (event.completed === true) {

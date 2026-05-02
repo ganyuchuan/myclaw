@@ -100,6 +100,21 @@
       .error {
         color: var(--danger);
       }
+      .kv {
+        display: grid;
+        grid-template-columns: 120px 1fr;
+        gap: 6px 10px;
+        font-size: 13px;
+      }
+      .preview {
+        margin-top: 8px;
+        padding: 8px;
+        border-radius: 6px;
+        background: #f7f9fb;
+        border: 1px solid var(--border);
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
     </style>
   </head>
   <body>
@@ -116,6 +131,11 @@
       </div>
 
       <div class="panel" id="summary"></div>
+
+      <div class="panel">
+        <h2 class="title">Latest Token Estimate</h2>
+        <div id="tokenEstimate"></div>
+      </div>
 
       <div class="panel">
         <div id="list"></div>
@@ -135,6 +155,7 @@
       const listEl = $("list");
       const toolCallsEl = $("toolCalls");
       const summaryEl = $("summary");
+      const tokenEstimateEl = $("tokenEstimate");
       const refreshBtn = $("refresh");
       const autoBtn = $("auto");
       let timer = null;
@@ -187,7 +208,27 @@
           '<span class="stat"><strong>Total:</strong> ' + (state.total ?? 0) + "</span>" +
           '<span class="stat"><strong>Waiting:</strong> ' + (state.waiting ?? 0) + "</span>" +
           '<span class="stat"><strong>Running:</strong> ' + (state.running ?? 0) + "</span>" +
+          '<span class="stat"><strong>Tokens:</strong> ' + (state.tokens ?? 0) + "</span>" +
+          '<span class="stat"><strong>Today:</strong> ' + (state.tokens_today ?? 0) + "</span>" +
           '<span class="stat"><strong>Msg:</strong> ' + (state.msg || "-") + "</span>";
+      }
+
+      function renderTokenEstimate(detail) {
+        if (!detail || typeof detail !== "object") {
+          tokenEstimateEl.innerHTML = '<p class="empty">No token estimate yet.</p>';
+          return;
+        }
+
+        tokenEstimateEl.innerHTML =
+          '<div class="kv">' +
+          '<strong>Session</strong><span>' + (detail.sessionId || '-') + '</span>' +
+          '<strong>Total</strong><span>' + (detail.totalTokens ?? 0) + '</span>' +
+          '<strong>Prompt</strong><span>' + (detail.promptTokens ?? 0) + '</span>' +
+          '<strong>Output</strong><span>' + (detail.outputTokens ?? 0) + '</span>' +
+          '<strong>Estimated At</strong><span>' + ts(detail.estimatedAtMs) + '</span>' +
+          '</div>' +
+          '<div style="margin-top:10px;"><strong>Prompt Preview</strong><div class="preview">' + (detail.promptPreview || '-') + '</div></div>' +
+          '<div style="margin-top:10px;"><strong>Output Preview</strong><div class="preview">' + (detail.outputPreview || '-') + '</div></div>';
       }
 
       function renderList(items) {
@@ -301,6 +342,7 @@
             fetchJson("/api/copilot/intercepts/tool-calls?limit=20"),
           ]);
           renderState(stateRes.state || {});
+          renderTokenEstimate((stateRes.state || {}).last_token_estimate || null);
           renderList(queueRes.items || []);
           renderToolCalls(toolCallsRes.items || []);
           statusEl.textContent = "Updated at " + new Date().toLocaleTimeString();
