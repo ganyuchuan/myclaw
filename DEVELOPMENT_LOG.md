@@ -1308,3 +1308,31 @@
 - `npm run typecheck`
 - `npm run build`
 - 结果：通过
+
+---
+
+### 36) 外部审批后自动回刷已发送飞书审核卡片
+
+关联提交：本次提交
+
+变更目标：
+- 当审批不是通过飞书卡片按钮触发（例如在网页审批页或其他调用方直接写 decision）时，Feishu bridge 也能及时更新此前已发送的审核卡片状态。
+
+主要改动：
+- `src/bridge/feishu.ts`
+  - 审核 worker 新增已发送卡片跟踪表（`requestId -> messageId`）。
+  - 发送 waiting 卡片时记录 `message_id`，建立请求与卡片映射。
+  - 轮询逻辑新增“已发卡片状态同步”步骤：
+    - 对不在 waiting 队列中的已跟踪 request，调用 `GET /api/copilot/intercepts/decision?id=...` 查询当前状态。
+    - 若状态已变为 `approved/denied`，主动调用飞书消息更新接口（PATCH）回刷原交互卡片。
+  - 按钮审批路径保留原有返回卡片更新，并同步标记本地跟踪状态。
+  - 新增飞书消息更新 helper：`updateFeishuInteractiveMessage`。
+  - `sendFeishuMessage` 调整为返回 create/reply API 结果，便于提取 `message_id`。
+
+涉及文件：
+- src/bridge/feishu.ts
+
+验证记录：
+- `npm run typecheck`
+- `npm run build`
+- 结果：通过

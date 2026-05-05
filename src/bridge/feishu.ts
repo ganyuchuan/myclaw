@@ -55,6 +55,18 @@ type InterceptDecisionResponse = {
   status?: string;
   decision?: string;
   reason?: string;
+  tool?: string;
+  decidedBy?: string | null;
+  decidedAtMs?: number;
+};
+
+type InterceptTrackedCard = {
+  requestId: string;
+  messageId: string;
+  chatId: string;
+  tool: string;
+  status: string;
+  updatedAtMs: number;
 };
 
 type InterceptCardActionValue = {
@@ -957,18 +969,28 @@ async function sendFeishuText({ feishuClient, chatId, replyToMessageId, text, re
 
 async function sendFeishuMessage({ feishuClient, chatId, replyToMessageId, msgType, content }) {
   if (replyToMessageId) {
-    await feishuClient.im.message.reply({
+    return feishuClient.im.message.reply({
       path: { message_id: replyToMessageId },
       data: { msg_type: msgType, content },
     });
-    return;
   }
 
-  await feishuClient.im.message.create({
+  return feishuClient.im.message.create({
     params: { receive_id_type: "chat_id" },
     data: {
       receive_id: chatId,
       msg_type: msgType,
+      content,
+    },
+  });
+}
+
+async function updateFeishuInteractiveMessage({ feishuClient, messageId, content }) {
+  return feishuClient.request({
+    method: "PATCH",
+    url: `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`,
+    data: {
+      msg_type: "interactive",
       content,
     },
   });
@@ -1024,6 +1046,26 @@ function createInterceptReviewClient(feishuCfg) {
       return Array.isArray(payload?.items) ? payload.items : [];
     },
 
+    async getDecision(id) {
+      const normalized = String(id ?? "").trim();
+      if (!normalized) {
+        return null;
+      }
+
+      try {
+        return await request(
+          "GET",
+          `/api/copilot/intercepts/decision?id=${encodeURIComponent(normalized)}`,
+        ) as InterceptDecisionResponse;
+      } catch (error) {
+        const message = String(error?.message ?? error);
+        if (message.includes("(404)")) {
+          return null;
+        }
+        throw error;
+      }
+    },
+
     async decide({ id, decision, reason, decidedBy }) {
       return request("POST", "/api/copilot/intercepts/decision", {
         id,
@@ -1056,11 +1098,82 @@ function createInterceptReviewWorker({ feishuCfg, feishuClient }) {
 
   const client = createInterceptReviewClient(feishuCfg);
   const seenSignatures = new Set();
+  const trackedCards = new Map<string, InterceptTrackedCard>();
   const queueLimit = parsePositiveInt(feishuCfg.interceptReviewQueueLimit, 20);
   const pollIntervalMs = parsePositiveInt(feishuCfg.interceptReviewPollIntervalMs, 3000);
   const decider = String(feishuCfg.interceptReviewDecider ?? "").trim() || "feishu-bridge";
   let timer = null as NodeJS.Timeout | null;
   let polling = false;
+
+  const markTrackedCardResolved = ({ requestId, status, reason, decidedBy, decision, tool }) => {
+    const tracked = trackedCards.get(requestId);
+    if (!tracked) {
+      return;
+    }
+
+    tracked.status = status;
+    tracked.updatedAtMs = Date.now();
+
+    void updateFeishuInteractiveMessage({
+      feishuClient,
+      messageId: tracked.messageId,
+      content: JSON.stringify(
+        buildInterceptReviewCard(
+          {
+            id: requestId,
+            tool: tool || tracked.tool,
+            hint: "-",
+            msg: "审批已处理",
+          },
+          {
+            decision,
+            decidedBy,
+            reason,
+          },
+        ),
+      ),
+    }).catch((error) => {
+      console.warn(
+        `[feishu-bridge][intercept-review] failed to update card requestId=${requestId}: ${String(error?.message ?? error)}`,
+      );
+    });
+  };
+
+  const syncResolvedCards = async (waitingItems) => {
+    const waitingSet = new Set(waitingItems.map((item) => String(item?.id ?? "").trim()).filter(Boolean));
+    const trackedIds = [...trackedCards.keys()];
+
+    for (const requestId of trackedIds) {
+      if (waitingSet.has(requestId)) {
+        continue;
+      }
+
+      const tracked = trackedCards.get(requestId);
+      if (!tracked || tracked.status !== "waiting") {
+        continue;
+      }
+
+      const decisionPayload = await client.getDecision(requestId);
+      if (!decisionPayload) {
+        continue;
+      }
+
+      const status = String(decisionPayload.status ?? "").trim().toLowerCase();
+      if (!status || status === "waiting") {
+        continue;
+      }
+
+      const resolvedDecision = status === "approved" ? "allow" : "deny";
+      markTrackedCardResolved({
+        requestId,
+        status,
+        decision: resolvedDecision,
+        decidedBy: String(decisionPayload.decidedBy ?? "manual"),
+        reason: String(decisionPayload.reason ?? "manual decision"),
+        tool: String(decisionPayload.tool ?? tracked.tool ?? "unknown"),
+      });
+    }
+  };
 
   const notifyNewWaitingItems = async (items) => {
     for (const item of items) {
@@ -1083,13 +1196,25 @@ function createInterceptReviewWorker({ feishuCfg, feishuClient }) {
         }
       }
 
-      await sendFeishuMessage({
+      const response = await sendFeishuMessage({
         feishuClient,
         chatId: reviewChatId,
         replyToMessageId: "",
         msgType: "interactive",
         content: JSON.stringify(buildInterceptReviewCard(item)),
       });
+
+      const messageId = String(response?.data?.message_id ?? response?.message_id ?? "").trim();
+      if (messageId) {
+        trackedCards.set(id, {
+          requestId: id,
+          messageId,
+          chatId: reviewChatId,
+          tool: String(item?.tool ?? "").trim() || "unknown",
+          status: "waiting",
+          updatedAtMs: Date.now(),
+        });
+      }
     }
   };
 
@@ -1101,6 +1226,7 @@ function createInterceptReviewWorker({ feishuCfg, feishuClient }) {
     try {
       const waitingItems = await client.getWaitingQueue(queueLimit);
       await notifyNewWaitingItems(waitingItems);
+      await syncResolvedCards(waitingItems);
     } catch (error) {
       console.warn(`[feishu-bridge][intercept-review] poll failed: ${String(error?.message ?? error)}`);
     } finally {
@@ -1162,6 +1288,15 @@ function createInterceptReviewWorker({ feishuCfg, feishuClient }) {
         hint: "-",
         msg: "审批已处理",
       };
+
+      markTrackedCardResolved({
+        requestId: updatedItem.id,
+        status: decision === "allow" ? "approved" : "denied",
+        decision,
+        decidedBy,
+        reason: String(decisionResponse?.reason ?? reason),
+        tool: updatedItem.tool,
+      });
 
       return {
         toast: {
