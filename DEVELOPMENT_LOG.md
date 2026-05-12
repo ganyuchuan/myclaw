@@ -1410,3 +1410,65 @@
 - `npm run typecheck`
 - `npm run build`
 - 结果：通过
+
+---
+
+## 2026-05-12
+
+### 37) Feishu 附件监听模式：缓存图片/文件直到收到文本消息
+
+变更目标：
+- 优化飞书消息流程：收到图片或文件时不立即发送给 Copilot，而是进入会话级监听缓存。
+- 等待用户在同一会话发送文本消息，此时再将所有缓存的附件整理为上下文，与文本一起提交给 Copilot。
+- 改善用户体验：用户可以先发送多个图片/文件，然后发送一条指令，Copilot 会同时看到所有上下文。
+
+主要改动：
+- `src/bridge/feishu.ts`
+  - 新增 `PendingAttachmentItem` 与 `PendingAttachmentState` 类型定义。
+  - 新增 `pendingAttachments` Map 管理会话级缓存，key 为 `copilotSessionKey`，value 为 `{ items, expireAtMs }`。
+  - 新增常量 `ATTACHMENT_LISTEN_WINDOW_MS = 5 * 60 * 1000`（5 分钟监听窗口）。
+  - 新增辅助函数：
+    - `isTextLikeFile(item)`: 识别 `.md` / `.txt` / `text/*` 类型文件。
+    - `cleanupAttachmentItems(items)`: 删除临时文件。
+    - `clearExpiredPendingAttachments(scopeKey)`: 清理过期缓存。
+    - `appendPendingAttachment(scopeKey, item)`: 将附件添加到缓存。
+    - `consumePendingAttachmentContext(scopeKey, fileMaxTextChars)`: 消费缓存并返回 `{ context, items }`。
+  - 修改消息处理流程：
+    - 若收到非文本的图片/文件（`inbound.kind === "image"` 或 `"file"`）：下载到临时目录，调用 `appendPendingAttachment` 入队，回复用户"已缓存，等待文本消息"。
+    - 若收到文本消息：调用 `consumePendingAttachmentContext` 取出缓存附件，整理为上下文块，拼接到用户文本前方。
+
+涉及文件：
+- src/bridge/feishu.ts
+
+验证记录：
+- `npm run typecheck`：通过
+- `npm run build`：通过
+
+---
+
+### 38) Bugfix: 修复临时文件过早删除导致 Copilot 无法读取附件
+
+变更目标：
+- 修复在附件监听模式中，Copilot 收到附件路径后报错"文件不存在"的问题。
+- 根本原因：`consumePendingAttachmentContext()` 内部在编译完上下文后立即调用 `cleanupAttachmentItems()`，此时 Copilot 还未读取这些文件。
+- 解决方案：将临时文件清理延迟到 Copilot 处理完成后再执行。
+
+主要改动：
+- `src/bridge/feishu.ts`
+  - 修改 `consumePendingAttachmentContext()` 返回值：不再调用清理，改为返回 `{ context, items }`。
+  - 在消息处理器顶层（try 块外）新增 `let pendingAttachmentCleanupItems = []` 数组。
+  - 在获取 pending 内容时（lines ~1706-1707），提取返回的 `items` 并赋值给 `pendingAttachmentCleanupItems`。
+  - 新增 finally 块（lines ~1762-1766），在 Copilot 响应完成后统一执行清理：`await cleanupAttachmentItems(pendingAttachmentCleanupItems)`。
+  - 确保文件生命周期：下载 -> Copilot 读取 -> 清理。
+
+涉及文件：
+- src/bridge/feishu.ts
+
+验证记录：
+- `npm run typecheck`：通过（zero errors）
+- `npm run build`：通过
+- `./node_modules/.bin/pm2 restart 1`：进程 myclaw-feishu 重启成功，状态 online
+
+后续测试：
+- 发送图片 -> 文本消息序列，验证 Copilot 能正确读取图片文件。
+

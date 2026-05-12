@@ -428,54 +428,50 @@ async function consumePendingAttachmentContext(scopeKey, fileMaxTextChars) {
   await clearExpiredPendingAttachments(scopeKey);
   const state = pendingAttachments.get(scopeKey);
   if (!state || state.items.length === 0) {
-    return "";
+    return { context: "", items: [] };
   }
 
   pendingAttachments.delete(scopeKey);
 
-  try {
-    const lines = [
-      "用户在当前对话中先发送了以下图片/文件，请先结合这些上下文再回答后续文本问题。",
-    ];
+  const lines = [
+    "用户在当前对话中先发送了以下图片/文件，请先结合这些上下文再回答后续文本问题。",
+  ];
 
-    let imageIndex = 0;
-    let fileIndex = 0;
+  let imageIndex = 0;
+  let fileIndex = 0;
 
-    for (const item of state.items) {
-      if (item.kind === "image") {
-        imageIndex += 1;
-        lines.push(`图片#${imageIndex}:`);
-        lines.push(`- 路径: ${item.filePath}`);
-        lines.push(`- 类型: ${item.contentType}`);
-        lines.push(`- 大小(bytes): ${item.size}`);
-        continue;
-      }
-
-      fileIndex += 1;
-      lines.push(`文件#${fileIndex}:`);
-      lines.push(`- 文件名: ${item.fileName || "(unknown)"}`);
+  for (const item of state.items) {
+    if (item.kind === "image") {
+      imageIndex += 1;
+      lines.push(`图片#${imageIndex}:`);
       lines.push(`- 路径: ${item.filePath}`);
       lines.push(`- 类型: ${item.contentType}`);
       lines.push(`- 大小(bytes): ${item.size}`);
-
-      if (isTextLikeFile(item)) {
-        const raw = await fs.readFile(item.filePath, "utf8").catch(() => "");
-        if (raw) {
-          const clipped = raw.length > fileMaxTextChars
-            ? `${raw.slice(0, fileMaxTextChars)}\n\n[内容已截断，总长度=${raw.length}]`
-            : raw;
-          lines.push("- 文本内容:");
-          lines.push("```");
-          lines.push(clipped);
-          lines.push("```");
-        }
-      }
+      continue;
     }
 
-    return lines.join("\n");
-  } finally {
-    await cleanupAttachmentItems(state.items);
+    fileIndex += 1;
+    lines.push(`文件#${fileIndex}:`);
+    lines.push(`- 文件名: ${item.fileName || "(unknown)"}`);
+    lines.push(`- 路径: ${item.filePath}`);
+    lines.push(`- 类型: ${item.contentType}`);
+    lines.push(`- 大小(bytes): ${item.size}`);
+
+    if (isTextLikeFile(item)) {
+      const raw = await fs.readFile(item.filePath, "utf8").catch(() => "");
+      if (raw) {
+        const clipped = raw.length > fileMaxTextChars
+          ? `${raw.slice(0, fileMaxTextChars)}\n\n[内容已截断，总长度=${raw.length}]`
+          : raw;
+        lines.push("- 文本内容:");
+        lines.push("```");
+        lines.push(clipped);
+        lines.push("```");
+      }
+    }
   }
+
+  return { context: lines.join("\n"), items: state.items };
 }
 
 function buildInterceptReviewCard(item, resolution = null) {
@@ -1628,6 +1624,7 @@ dispatcher.register({
       }
     }
 
+    let pendingAttachmentCleanupItems = [];
     try {
       let reply;
 
@@ -1701,13 +1698,14 @@ dispatcher.register({
 
       if (!reply && isCopilot) {
         let prompt = text.trim();
-        const pendingAttachmentContext = await consumePendingAttachmentContext(
+        const pendingAttachmentPayload = await consumePendingAttachmentContext(
           copilotSessionKey,
           feishuCfg.fileMaxTextChars,
         );
-        if (pendingAttachmentContext) {
+        pendingAttachmentCleanupItems = pendingAttachmentPayload.items;
+        if (pendingAttachmentPayload.context) {
           prompt = [
-            pendingAttachmentContext,
+            pendingAttachmentPayload.context,
             "用户本条文本消息如下：",
             prompt,
           ].join("\n\n");
@@ -1760,6 +1758,10 @@ dispatcher.register({
         });
       } catch (replyError) {
         console.error(`[feishu-bridge] error reply failed: ${String(replyError?.message ?? replyError)}`);
+      }
+    } finally {
+      if (pendingAttachmentCleanupItems.length > 0) {
+        await cleanupAttachmentItems(pendingAttachmentCleanupItems);
       }
     }
   },
