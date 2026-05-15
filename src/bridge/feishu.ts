@@ -56,6 +56,8 @@ type InterceptDecisionResponse = {
   decision?: string;
   reason?: string;
   tool?: string;
+  hint?: string;
+  msg?: string;
   decidedBy?: string | null;
   decidedAtMs?: number;
 };
@@ -65,6 +67,8 @@ type InterceptTrackedCard = {
   messageId: string;
   chatId: string;
   tool: string;
+  hint: string;
+  msg: string;
   status: string;
   updatedAtMs: number;
 };
@@ -1239,13 +1243,20 @@ function createInterceptReviewWorker({ feishuCfg, feishuClient }) {
   let timer = null as NodeJS.Timeout | null;
   let polling = false;
 
-  const markTrackedCardResolved = ({ requestId, status, reason, decidedBy, decision, tool }) => {
+  const markTrackedCardResolved = ({ requestId, status, reason, decidedBy, decision, tool, hint, msg }) => {
     const tracked = trackedCards.get(requestId);
     if (!tracked) {
       return;
     }
 
     tracked.status = status;
+    tracked.tool = tool || tracked.tool;
+    if (hint) {
+      tracked.hint = hint;
+    }
+    if (msg) {
+      tracked.msg = msg;
+    }
     tracked.updatedAtMs = Date.now();
 
     void updateFeishuInteractiveMessage({
@@ -1256,8 +1267,8 @@ function createInterceptReviewWorker({ feishuCfg, feishuClient }) {
           {
             id: requestId,
             tool: tool || tracked.tool,
-            hint: "-",
-            msg: "审批已处理",
+            hint: hint || tracked.hint || "-",
+            msg: msg || tracked.msg || "审批已处理",
           },
           {
             decision,
@@ -1305,6 +1316,8 @@ function createInterceptReviewWorker({ feishuCfg, feishuClient }) {
         decidedBy: String(decisionPayload.decidedBy ?? "manual"),
         reason: String(decisionPayload.reason ?? "manual decision"),
         tool: String(decisionPayload.tool ?? tracked.tool ?? "unknown"),
+        hint: String(decisionPayload.hint ?? tracked.hint ?? "").trim(),
+        msg: String(decisionPayload.msg ?? tracked.msg ?? "审批已处理").trim(),
       });
     }
   };
@@ -1345,6 +1358,8 @@ function createInterceptReviewWorker({ feishuCfg, feishuClient }) {
           messageId,
           chatId: reviewChatId,
           tool: String(item?.tool ?? "").trim() || "unknown",
+          hint: String(item?.hint ?? "").trim() || "-",
+          msg: String(item?.msg ?? "").trim() || "-",
           status: "waiting",
           updatedAtMs: Date.now(),
         });
@@ -1416,11 +1431,13 @@ function createInterceptReviewWorker({ feishuCfg, feishuClient }) {
         reason,
       });
 
+      const tracked = trackedCards.get(id);
+
       const updatedItem = {
         id: String(decisionResponse?.id ?? id),
-        tool: String(data?.action?.value?.tool ?? "") || "unknown",
-        hint: "-",
-        msg: "审批已处理",
+        tool: String(data?.action?.value?.tool ?? "") || tracked?.tool || "unknown",
+        hint: String(decisionResponse?.hint ?? tracked?.hint ?? "").trim() || "-",
+        msg: String(decisionResponse?.msg ?? tracked?.msg ?? "审批已处理").trim() || "审批已处理",
       };
 
       markTrackedCardResolved({
@@ -1430,6 +1447,8 @@ function createInterceptReviewWorker({ feishuCfg, feishuClient }) {
         decidedBy,
         reason: String(decisionResponse?.reason ?? reason),
         tool: updatedItem.tool,
+        hint: updatedItem.hint,
+        msg: updatedItem.msg,
       });
 
       return {
