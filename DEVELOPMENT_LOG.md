@@ -2,6 +2,26 @@
 
 ## 2026-05-16
 
+### 15) sync server 存储从 JSON 切换到 SQLite
+
+变更目标：
+- 将 sync server 的 intercept 存储从整文件 JSON 读改写切换为 SQLite，降低并发写覆盖风险。
+- 保持现有 Copilot 对接 HTTP 协议不变，调用方无需改造。
+
+主要改动：
+- `src/sync/http-server.ts`
+  - 引入 `node:sqlite`（`DatabaseSync`）并初始化 SQLite 数据库。
+  - 新增三张表：`intercept_state`、`intercept_requests`、`intercept_tool_calls`。
+  - 将 `/api/copilot/intercepts/*` 的读写改为表级 SQL 操作。
+  - 所有写操作改为事务提交（`BEGIN IMMEDIATE` / `COMMIT`，异常回滚）。
+  - 保留原有请求/响应结构与路径，不改变接口契约。
+  - 增加 legacy JSON 迁移逻辑：旧 JSON 文件可自动备份并导入 SQLite。
+- `.env.example`
+  - `SYNC_DB_FILE` 默认值调整为 `data/sync.db`（SQLite 文件）。
+
+验证记录：
+- `npm run typecheck`：通过
+
 ### 14) 移除 jobs/runs 同步接口与 sync client
 
 变更目标：

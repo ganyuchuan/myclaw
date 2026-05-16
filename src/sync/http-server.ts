@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { createServer } from "node:http";
+import { DatabaseSync } from "node:sqlite";
 import dotenv from "dotenv";
 import fs from "node:fs";
 import os from "node:os";
@@ -51,7 +52,7 @@ function dayKey(ts = Date.now()) {
 }
 
 const port = toInt(process.env.SYNC_PORT, 18790);
-const dbFile = process.env.SYNC_DB_FILE?.trim() || "data/cron-jobs-sync.json";
+const dbFile = process.env.SYNC_DB_FILE?.trim() || "data/sync.db";
 const interceptAuthToken = process.env.SYNC_INTERCEPT_AUTH_TOKEN?.trim() || "";
 const interceptDefaultDecision = normalizeDecision(process.env.SYNC_INTERCEPT_DEFAULT_DECISION, "allow");
 const interceptManualQueueEnabled = toBool(process.env.SYNC_INTERCEPT_MANUAL_QUEUE_ENABLED, false);
@@ -60,6 +61,8 @@ const interceptAutoAllowTools = new Set(toList(process.env.SYNC_INTERCEPT_AUTO_A
 const interceptAutoDenyTools = new Set(toList(process.env.SYNC_INTERCEPT_AUTO_DENY_TOOLS, []));
 const interceptWaitTimeoutMs = toInt(process.env.SYNC_INTERCEPT_WAIT_TIMEOUT_MS, 60000);
 const interceptPollAfterMs = toInt(process.env.SYNC_INTERCEPT_POLL_AFTER_MS, 1000);
+const maxStateEntries = 50;
+const maxToolCalls = 100;
 
 function maskToken(value) {
   const text = String(value ?? "").trim();
@@ -141,6 +144,27 @@ function makeDefaultInterceptState() {
   };
 }
 
+function parseJsonText(raw, fallback) {
+  const text = String(raw ?? "").trim();
+  if (!text) {
+    return fallback;
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return fallback;
+  }
+}
+
+function stringifyJson(value, fallback = "null") {
+  try {
+    return JSON.stringify(value ?? null);
+  } catch {
+    return fallback;
+  }
+}
+
 function ensureInterceptState(raw) {
   const fallback = makeDefaultInterceptState();
   if (!raw || typeof raw !== "object") {
@@ -208,10 +232,6 @@ function ensureStoreShape(raw) {
   return { intercepts };
 }
 
-type InterceptRequestLike = {
-  id?: string;
-};
-
 type InterceptPretoolRequest = {
   id?: string;
   tool?: string;
@@ -267,24 +287,493 @@ type InterceptEventBody = {
   event?: InterceptEventPayload;
 };
 
-function loadStore() {
+function normalizeRequestRecord(raw) {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+
+  return {
+    id: String(raw.id ?? "").trim(),
+    tool: String(raw.tool ?? "").trim(),
+    hint: String(raw.hint ?? "").trim(),
+    msg: String(raw.msg ?? "").trim(),
+    input: raw.input && typeof raw.input === "object" ? raw.input : null,
+    sessionId: String(raw.sessionId ?? "").trim(),
+    workDir: String(raw.workDir ?? "").trim(),
+    status: String(raw.status ?? "waiting").trim(),
+    decision: normalizeDecision(raw.decision, "wait"),
+    reason: String(raw.reason ?? "").trim(),
+    createdAtMs: Number.isFinite(raw.createdAtMs) ? raw.createdAtMs : 0,
+    updatedAtMs: Number.isFinite(raw.updatedAtMs) ? raw.updatedAtMs : 0,
+    expiresAtMs: Number.isFinite(raw.expiresAtMs) ? raw.expiresAtMs : 0,
+    decidedBy: String(raw.decidedBy ?? "").trim(),
+    decidedAtMs: Number.isFinite(raw.decidedAtMs) ? raw.decidedAtMs : 0,
+  };
+}
+
+function normalizeToolCallRecord(raw) {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+
+  return {
+    id: String(raw.id ?? "").trim(),
+    sessionId: String(raw.sessionId ?? "").trim(),
+    tool: String(raw.tool ?? "").trim(),
+    args: raw.args && typeof raw.args === "object" ? raw.args : null,
+    result: raw.result && typeof raw.result === "object" ? raw.result : raw.result ?? null,
+    ts: Number.isFinite(raw.ts) ? raw.ts : Date.now(),
+    workDir: String(raw.workDir ?? "").trim(),
+  };
+}
+
+function loadLegacyStoreForMigration() {
   try {
     const raw = fs.readFileSync(dbFile, "utf8");
-    return ensureStoreShape(JSON.parse(raw));
+    const trimmed = raw.trim();
+    if (!trimmed || !trimmed.startsWith("{")) {
+      return null;
+    }
+
+    const parsed = ensureStoreShape(JSON.parse(trimmed));
+    const backupFile = `${dbFile}.legacy-${Date.now()}.json`;
+    fs.renameSync(dbFile, backupFile);
+    console.log(`[sync-server] backed up legacy JSON store to ${backupFile}`);
+    return parsed;
   } catch (error) {
     if (error?.code === "ENOENT") {
-      return ensureStoreShape(null);
+      return null;
     }
     throw error;
   }
 }
 
-function saveStore(store) {
+function loadStateFromDb(database) {
+  const row = database.prepare(`
+    SELECT
+      total,
+      running,
+      waiting,
+      completed,
+      tokens,
+      tokens_today,
+      msg,
+      entries_json,
+      prompt_json,
+      last_token_estimate_json,
+      tokens_day,
+      last_completed_at_ms
+    FROM intercept_state
+    WHERE id = 1
+  `).get();
+
+  if (!row) {
+    return makeDefaultInterceptState();
+  }
+
+  return ensureInterceptState({
+    total: row.total,
+    running: row.running,
+    waiting: row.waiting,
+    completed: Boolean(row.completed),
+    tokens: row.tokens,
+    tokens_today: row.tokens_today,
+    msg: row.msg,
+    entries: parseJsonText(row.entries_json, []),
+    prompt: parseJsonText(row.prompt_json, null),
+    last_token_estimate: parseJsonText(row.last_token_estimate_json, null),
+    tokens_day: row.tokens_day,
+    last_completed_at_ms: row.last_completed_at_ms,
+  });
+}
+
+function saveStateToDb(database, state) {
+  const normalized = ensureInterceptState(state);
+  database.prepare(`
+    INSERT INTO intercept_state (
+      id,
+      total,
+      running,
+      waiting,
+      completed,
+      tokens,
+      tokens_today,
+      msg,
+      entries_json,
+      prompt_json,
+      last_token_estimate_json,
+      tokens_day,
+      last_completed_at_ms
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      total = excluded.total,
+      running = excluded.running,
+      waiting = excluded.waiting,
+      completed = excluded.completed,
+      tokens = excluded.tokens,
+      tokens_today = excluded.tokens_today,
+      msg = excluded.msg,
+      entries_json = excluded.entries_json,
+      prompt_json = excluded.prompt_json,
+      last_token_estimate_json = excluded.last_token_estimate_json,
+      tokens_day = excluded.tokens_day,
+      last_completed_at_ms = excluded.last_completed_at_ms
+  `).run(
+    1,
+    normalized.total,
+    normalized.running,
+    normalized.waiting,
+    normalized.completed ? 1 : 0,
+    normalized.tokens,
+    normalized.tokens_today,
+    normalized.msg,
+    stringifyJson(normalized.entries, "[]"),
+    stringifyJson(normalized.prompt, "null"),
+    stringifyJson(normalized.last_token_estimate, "null"),
+    normalized.tokens_day,
+    normalized.last_completed_at_ms,
+  );
+}
+
+function getRequestById(database, id) {
+  const row = database.prepare(`
+    SELECT
+      id,
+      tool,
+      hint,
+      msg,
+      input_json,
+      session_id,
+      work_dir,
+      status,
+      decision,
+      reason,
+      created_at_ms,
+      updated_at_ms,
+      expires_at_ms,
+      decided_by,
+      decided_at_ms
+    FROM intercept_requests
+    WHERE id = ?
+  `).get(id);
+
+  if (!row) {
+    return null;
+  }
+
+  return normalizeRequestRecord({
+    id: row.id,
+    tool: row.tool,
+    hint: row.hint,
+    msg: row.msg,
+    input: parseJsonText(row.input_json, null),
+    sessionId: row.session_id,
+    workDir: row.work_dir,
+    status: row.status,
+    decision: row.decision,
+    reason: row.reason,
+    createdAtMs: row.created_at_ms,
+    updatedAtMs: row.updated_at_ms,
+    expiresAtMs: row.expires_at_ms,
+    decidedBy: row.decided_by,
+    decidedAtMs: row.decided_at_ms,
+  });
+}
+
+function listRequestsFromDb(database, { status = "", limit = 100 } = {}) {
+  const normalizedLimit = Math.max(1, toInt(limit, 100));
+  const rows = status
+    ? database.prepare(`
+        SELECT
+          id,
+          tool,
+          hint,
+          msg,
+          input_json,
+          session_id,
+          work_dir,
+          status,
+          decision,
+          reason,
+          created_at_ms,
+          updated_at_ms,
+          expires_at_ms,
+          decided_by,
+          decided_at_ms
+        FROM intercept_requests
+        WHERE status = ?
+        ORDER BY created_at_ms DESC
+        LIMIT ?
+      `).all(status, normalizedLimit)
+    : database.prepare(`
+        SELECT
+          id,
+          tool,
+          hint,
+          msg,
+          input_json,
+          session_id,
+          work_dir,
+          status,
+          decision,
+          reason,
+          created_at_ms,
+          updated_at_ms,
+          expires_at_ms,
+          decided_by,
+          decided_at_ms
+        FROM intercept_requests
+        ORDER BY created_at_ms DESC
+        LIMIT ?
+      `).all(normalizedLimit);
+
+  return rows.map((row) => normalizeRequestRecord({
+    id: row.id,
+    tool: row.tool,
+    hint: row.hint,
+    msg: row.msg,
+    input: parseJsonText(row.input_json, null),
+    sessionId: row.session_id,
+    workDir: row.work_dir,
+    status: row.status,
+    decision: row.decision,
+    reason: row.reason,
+    createdAtMs: row.created_at_ms,
+    updatedAtMs: row.updated_at_ms,
+    expiresAtMs: row.expires_at_ms,
+    decidedBy: row.decided_by,
+    decidedAtMs: row.decided_at_ms,
+  }));
+}
+
+function saveRequestToDb(database, request) {
+  const normalized = normalizeRequestRecord(request);
+  if (!normalized?.id) {
+    return;
+  }
+
+  database.prepare(`
+    INSERT INTO intercept_requests (
+      id,
+      tool,
+      hint,
+      msg,
+      input_json,
+      session_id,
+      work_dir,
+      status,
+      decision,
+      reason,
+      created_at_ms,
+      updated_at_ms,
+      expires_at_ms,
+      decided_by,
+      decided_at_ms
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      tool = excluded.tool,
+      hint = excluded.hint,
+      msg = excluded.msg,
+      input_json = excluded.input_json,
+      session_id = excluded.session_id,
+      work_dir = excluded.work_dir,
+      status = excluded.status,
+      decision = excluded.decision,
+      reason = excluded.reason,
+      created_at_ms = excluded.created_at_ms,
+      updated_at_ms = excluded.updated_at_ms,
+      expires_at_ms = excluded.expires_at_ms,
+      decided_by = excluded.decided_by,
+      decided_at_ms = excluded.decided_at_ms
+  `).run(
+    normalized.id,
+    normalized.tool,
+    normalized.hint,
+    normalized.msg,
+    stringifyJson(normalized.input, "null"),
+    normalized.sessionId,
+    normalized.workDir,
+    normalized.status,
+    normalized.decision,
+    normalized.reason,
+    normalized.createdAtMs,
+    normalized.updatedAtMs,
+    normalized.expiresAtMs,
+    normalized.decidedBy,
+    normalized.decidedAtMs,
+  );
+}
+
+function listToolCallsFromDb(database, limit = maxToolCalls) {
+  const normalizedLimit = Math.max(1, Math.min(toInt(limit, maxToolCalls), 500));
+  const rows = database.prepare(`
+    SELECT id, session_id, tool, args_json, result_json, ts, work_dir
+    FROM intercept_tool_calls
+    ORDER BY ts DESC, id DESC
+    LIMIT ?
+  `).all(normalizedLimit);
+
+  return rows
+    .map((row) => normalizeToolCallRecord({
+      id: row.id,
+      sessionId: row.session_id,
+      tool: row.tool,
+      args: parseJsonText(row.args_json, null),
+      result: parseJsonText(row.result_json, null),
+      ts: row.ts,
+      workDir: row.work_dir,
+    }))
+    .filter(Boolean);
+}
+
+function countToolCallsFromDb(database) {
+  const row = database.prepare("SELECT COUNT(*) AS total FROM intercept_tool_calls").get();
+  return Number.isFinite(row?.total) ? row.total : 0;
+}
+
+function insertToolCallToDb(database, toolCall) {
+  const normalized = normalizeToolCallRecord(toolCall);
+  if (!normalized?.id) {
+    return;
+  }
+
+  database.prepare(`
+    INSERT INTO intercept_tool_calls (id, session_id, tool, args_json, result_json, ts, work_dir)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      session_id = excluded.session_id,
+      tool = excluded.tool,
+      args_json = excluded.args_json,
+      result_json = excluded.result_json,
+      ts = excluded.ts,
+      work_dir = excluded.work_dir
+  `).run(
+    normalized.id,
+    normalized.sessionId,
+    normalized.tool,
+    stringifyJson(normalized.args, "null"),
+    stringifyJson(normalized.result, "null"),
+    normalized.ts,
+    normalized.workDir,
+  );
+
+  database.prepare(`
+    DELETE FROM intercept_tool_calls
+    WHERE id NOT IN (
+      SELECT id
+      FROM intercept_tool_calls
+      ORDER BY ts DESC, id DESC
+      LIMIT ?
+    )
+  `).run(maxToolCalls);
+}
+
+function countRequestsFromDb(database) {
+  const row = database.prepare("SELECT COUNT(*) AS total FROM intercept_requests").get();
+  return Number.isFinite(row?.total) ? row.total : 0;
+}
+
+function openDatabase() {
   const dir = path.dirname(dbFile);
   fs.mkdirSync(dir, { recursive: true });
-  const tmp = `${dbFile}.tmp.${process.pid}`;
-  fs.writeFileSync(tmp, JSON.stringify(store, null, 2));
-  fs.renameSync(tmp, dbFile);
+  const legacyStore = loadLegacyStoreForMigration();
+  const database = new DatabaseSync(dbFile);
+
+  database.exec(`
+    PRAGMA journal_mode = WAL;
+    PRAGMA synchronous = NORMAL;
+    PRAGMA busy_timeout = 5000;
+
+    CREATE TABLE IF NOT EXISTS intercept_state (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      total INTEGER NOT NULL DEFAULT 0,
+      running INTEGER NOT NULL DEFAULT 0,
+      waiting INTEGER NOT NULL DEFAULT 0,
+      completed INTEGER NOT NULL DEFAULT 0,
+      tokens INTEGER NOT NULL DEFAULT 0,
+      tokens_today INTEGER NOT NULL DEFAULT 0,
+      msg TEXT NOT NULL DEFAULT '',
+      entries_json TEXT NOT NULL DEFAULT '[]',
+      prompt_json TEXT,
+      last_token_estimate_json TEXT,
+      tokens_day TEXT NOT NULL,
+      last_completed_at_ms INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS intercept_requests (
+      id TEXT PRIMARY KEY,
+      tool TEXT NOT NULL,
+      hint TEXT NOT NULL DEFAULT '',
+      msg TEXT NOT NULL DEFAULT '',
+      input_json TEXT,
+      session_id TEXT NOT NULL DEFAULT '',
+      work_dir TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL,
+      decision TEXT NOT NULL,
+      reason TEXT NOT NULL DEFAULT '',
+      created_at_ms INTEGER NOT NULL DEFAULT 0,
+      updated_at_ms INTEGER NOT NULL DEFAULT 0,
+      expires_at_ms INTEGER NOT NULL DEFAULT 0,
+      decided_by TEXT NOT NULL DEFAULT '',
+      decided_at_ms INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_intercept_requests_status_created_at
+      ON intercept_requests(status, created_at_ms DESC);
+
+    CREATE TABLE IF NOT EXISTS intercept_tool_calls (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL DEFAULT '',
+      tool TEXT NOT NULL DEFAULT '',
+      args_json TEXT,
+      result_json TEXT,
+      ts INTEGER NOT NULL DEFAULT 0,
+      work_dir TEXT NOT NULL DEFAULT ''
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_intercept_tool_calls_ts
+      ON intercept_tool_calls(ts DESC, id DESC);
+  `);
+
+  const stateRow = database.prepare("SELECT 1 AS ok FROM intercept_state WHERE id = 1").get();
+  if (!stateRow) {
+    saveStateToDb(database, makeDefaultInterceptState());
+  }
+
+  if (legacyStore) {
+    const migrated = ensureStoreShape(legacyStore);
+    saveStateToDb(database, migrated.intercepts.state);
+
+    for (const request of Object.values(migrated.intercepts.requests ?? {})) {
+      saveRequestToDb(database, request);
+    }
+
+    for (const toolCall of Array.isArray(migrated.intercepts.tool_calls) ? migrated.intercepts.tool_calls : []) {
+      insertToolCallToDb(database, toolCall);
+    }
+
+    console.log(`[sync-server] migrated legacy intercept store into SQLite at ${dbFile}`);
+  }
+
+  return database;
+}
+
+const storeDb = openDatabase();
+
+function withTransaction(action) {
+  storeDb.exec("BEGIN IMMEDIATE");
+  try {
+    const result = action();
+    storeDb.exec("COMMIT");
+    return result;
+  } catch (error) {
+    try {
+      storeDb.exec("ROLLBACK");
+    } catch {
+      // Ignore rollback failures after the primary error.
+    }
+    throw error;
+  }
 }
 
 function json(res, status, body) {
@@ -350,8 +839,8 @@ function appendEntry(state, text) {
   }
 
   state.entries.push(normalized);
-  if (state.entries.length > 50) {
-    state.entries = state.entries.slice(-50);
+  if (state.entries.length > maxStateEntries) {
+    state.entries = state.entries.slice(-maxStateEntries);
   }
 }
 
@@ -363,7 +852,7 @@ function replaceEntries(state, entries) {
   state.entries = entries
     .map((item) => String(item ?? "").trim())
     .filter(Boolean)
-    .slice(-50);
+    .slice(-maxStateEntries);
 }
 
 function decisionForStatus(status) {
@@ -385,36 +874,13 @@ function refreshTodayTokens(state) {
   }
 }
 
-function updateStateCounters(intercepts) {
-  intercepts.state.total = Number.isFinite(intercepts.state.total) ? Math.max(0, intercepts.state.total) : 0;
-  intercepts.state.waiting = Number.isFinite(intercepts.state.waiting) ? Math.max(0, intercepts.state.waiting) : 0;
-  intercepts.state.running = Number.isFinite(intercepts.state.running) ? Math.max(0, intercepts.state.running) : 0;
+function updateStateCounters(state) {
+  state.total = Number.isFinite(state.total) ? Math.max(0, state.total) : 0;
+  state.waiting = Number.isFinite(state.waiting) ? Math.max(0, state.waiting) : 0;
+  state.running = Number.isFinite(state.running) ? Math.max(0, state.running) : 0;
 }
 
-function appendToolCall(intercepts, toolCall) {
-  if (!toolCall || typeof toolCall !== "object") {
-    return;
-  }
-
-  const normalized = {
-    id: String(toolCall.id ?? "").trim(),
-    sessionId: String(toolCall.sessionId ?? "").trim(),
-    tool: String(toolCall.tool ?? "").trim(),
-    args: toolCall.args && typeof toolCall.args === "object" ? toolCall.args : null,
-    result: toolCall.result && typeof toolCall.result === "object" ? toolCall.result : toolCall.result ?? null,
-    ts: Number.isFinite(toolCall.ts) ? toolCall.ts : Date.now(),
-    workDir: String(toolCall.workDir ?? "").trim(),
-  };
-
-  intercepts.tool_calls = Array.isArray(intercepts.tool_calls) ? intercepts.tool_calls : [];
-  intercepts.tool_calls.push(normalized);
-  if (intercepts.tool_calls.length > 100) {
-    intercepts.tool_calls = intercepts.tool_calls.slice(-100);
-  }
-}
-
-function maybeExpireRequest(intercepts, id) {
-  const request = intercepts.requests[id];
+function maybeExpireRequest(state, request) {
   if (!request || request.status !== "waiting") {
     return request;
   }
@@ -428,12 +894,28 @@ function maybeExpireRequest(intercepts, id) {
     console.warn(
       `[sync-server][intercept] queue timeout id=${request.id} tool=${request.tool} waitedMs=${Math.max(0, now - Number(request.createdAtMs ?? now))}`,
     );
-    intercepts.state.msg = `Request ${request.id} timed out`;
-    appendEntry(intercepts.state, `Timeout: ${request.tool} (${request.id})`);
-    updateStateCounters(intercepts);
+    state.msg = `Request ${request.id} timed out`;
+    appendEntry(state, `Timeout: ${request.tool} (${request.id})`);
+    updateStateCounters(state);
   }
 
   return request;
+}
+
+function toQueueItem(item) {
+  return {
+    id: item.id,
+    status: item.status,
+    decision: item.decision,
+    tool: item.tool,
+    hint: item.hint,
+    msg: item.msg,
+    createdAtMs: item.createdAtMs,
+    updatedAtMs: item.updatedAtMs,
+    expiresAtMs: item.expiresAtMs,
+    decidedBy: item.decidedBy || null,
+    reason: item.reason || "",
+  };
 }
 
 function resolvePretoolDecision(tool) {
@@ -503,11 +985,10 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && pathname === "/health") {
-      const store = loadStore();
       return json(res, 200, {
         ok: true,
         service: "myclaw-sync-server",
-        intercepts: Object.keys(store.intercepts.requests).length,
+        intercepts: countRequestsFromDb(storeDb),
       });
     }
 
@@ -517,64 +998,63 @@ const server = createServer(async (req, res) => {
       }
 
       if (req.method === "GET" && pathname === "/api/copilot/intercepts/state") {
-        const store = loadStore();
-        refreshTodayTokens(store.intercepts.state);
-        updateStateCounters(store.intercepts);
-        saveStore(store);
+        const state = withTransaction(() => {
+          const nextState = loadStateFromDb(storeDb);
+          refreshTodayTokens(nextState);
+          updateStateCounters(nextState);
+          saveStateToDb(storeDb, nextState);
+          return nextState;
+        });
+
         return json(res, 200, {
-          state: toPublicInterceptState(store.intercepts.state),
+          state: toPublicInterceptState(state),
         });
       }
 
       if (req.method === "GET" && pathname === "/api/copilot/intercepts/queue") {
         const statusFilter = String(url.searchParams.get("status") ?? "").trim().toLowerCase();
         const limit = toInt(url.searchParams.get("limit"), 100);
-        const store = loadStore();
-        const requestValues = Object.values(store.intercepts.requests as Record<string, InterceptRequestLike>);
-        const items = requestValues
-          .map((item) => maybeExpireRequest(store.intercepts, item?.id))
-          .filter(Boolean)
-          .filter((item) => !statusFilter || String(item.status ?? "").toLowerCase() === statusFilter)
-          .sort((a, b) => Number(b.createdAtMs ?? 0) - Number(a.createdAtMs ?? 0))
-          .slice(0, limit)
-          .map((item) => ({
-            id: item.id,
-            status: item.status,
-            decision: item.decision,
-            tool: item.tool,
-            hint: item.hint,
-            msg: item.msg,
-            createdAtMs: item.createdAtMs,
-            updatedAtMs: item.updatedAtMs,
-            expiresAtMs: item.expiresAtMs,
-            decidedBy: item.decidedBy || null,
-            reason: item.reason || "",
-          }));
-        updateStateCounters(store.intercepts);
-        saveStore(store);
+        const items = withTransaction(() => {
+          const state = loadStateFromDb(storeDb);
+          const waitingItems = listRequestsFromDb(storeDb, { status: "waiting", limit: 1000000 });
+
+          for (const item of waitingItems) {
+            const previousStatus = item.status;
+            const previousUpdatedAtMs = item.updatedAtMs;
+            maybeExpireRequest(state, item);
+            if (item.status !== previousStatus || item.updatedAtMs !== previousUpdatedAtMs) {
+              saveRequestToDb(storeDb, item);
+            }
+          }
+
+          updateStateCounters(state);
+          saveStateToDb(storeDb, state);
+
+          return listRequestsFromDb(storeDb, {
+            status: statusFilter,
+            limit,
+          }).map(toQueueItem);
+        });
+
         return json(res, 200, { items });
       }
 
       if (req.method === "GET" && pathname === "/api/copilot/intercepts/tool-calls") {
         const requested = toInt(url.searchParams.get("limit"), 100);
         const limit = Math.min(requested, 500);
-        const store = loadStore();
-        const items = (Array.isArray(store.intercepts.tool_calls) ? store.intercepts.tool_calls : [])
-          .slice(-limit)
-          .reverse()
-          .map((item) => ({
-            id: String(item?.id ?? "").trim(),
-            sessionId: String(item?.sessionId ?? "").trim(),
-            tool: String(item?.tool ?? "").trim(),
-            args: item?.args ?? null,
-            result: item?.result ?? null,
-            ts: Number.isFinite(item?.ts) ? item.ts : 0,
-            workDir: String(item?.workDir ?? "").trim(),
-          }));
+        const items = listToolCallsFromDb(storeDb, limit).map((item) => ({
+          id: item.id,
+          sessionId: item.sessionId,
+          tool: item.tool,
+          args: item.args ?? null,
+          result: item.result ?? null,
+          ts: item.ts,
+          workDir: item.workDir,
+        }));
 
         return json(res, 200, {
           items,
-          total: Array.isArray(store.intercepts.tool_calls) ? store.intercepts.tool_calls.length : 0,
+          total: countToolCallsFromDb(storeDb),
           limit,
         });
       }
@@ -595,88 +1075,98 @@ const server = createServer(async (req, res) => {
 
         console.log(`[sync-server][intercept] pretool received id=${id} tool=${tool}`);
 
-        const store = loadStore();
-        refreshTodayTokens(store.intercepts.state);
+        const result = withTransaction(() => {
+          const state = loadStateFromDb(storeDb);
+          refreshTodayTokens(state);
 
-        let item = maybeExpireRequest(store.intercepts, id);
-        const isNew = !item;
+          let item = getRequestById(storeDb, id);
+          if (item) {
+            maybeExpireRequest(state, item);
+          }
 
-        if (!item) {
-          item = {
+          const isNew = !item;
+          if (!item) {
+            item = {
+              id,
+              tool,
+              hint: String(request.hint ?? "").trim(),
+              msg: String(request.msg ?? "").trim() || "Intercepted tool call",
+              input: request.input && typeof request.input === "object" ? request.input : null,
+              sessionId: String(request.sessionId ?? "").trim() || "",
+              workDir: String(request.workDir ?? "").trim() || "",
+              status: "waiting",
+              decision: "wait",
+              reason: "",
+              createdAtMs: now,
+              updatedAtMs: now,
+              expiresAtMs: now + interceptWaitTimeoutMs,
+              decidedBy: "",
+              decidedAtMs: 0,
+            };
+            appendEntry(state, `Intercepted: ${tool} (${id})`);
+            console.log(`[sync-server][intercept] queued id=${id} tool=${tool} total=${state.total}`);
+          }
+
+          const preDecision = resolvePretoolDecision(tool);
+          if (preDecision === "allow") {
+            item.status = "approved";
+            item.decision = "allow";
+            item.reason = item.reason || "auto allowed by server policy";
+            console.log(`[sync-server][intercept] auto allow id=${id} tool=${tool}`);
+          } else if (preDecision === "deny") {
+            item.status = "denied";
+            item.decision = "deny";
+            item.reason = item.reason || "auto denied by server policy";
+            console.log(`[sync-server][intercept] auto deny id=${id} tool=${tool}`);
+          } else {
+            item.status = "waiting";
+            item.decision = "wait";
+            item.reason = item.reason || "waiting for manual decision";
+            item.expiresAtMs = now + interceptWaitTimeoutMs;
+            console.log(
+              `[sync-server][intercept] waiting manual decision id=${id} tool=${tool} expiresInMs=${interceptWaitTimeoutMs}`,
+            );
+          }
+
+          item.updatedAtMs = now;
+          state.prompt = {
             id,
             tool,
-            hint: String(request.hint ?? "").trim(),
-            msg: String(request.msg ?? "").trim() || "Intercepted tool call",
-            input: request.input && typeof request.input === "object" ? request.input : null,
-            sessionId: String(request.sessionId ?? "").trim() || "",
-            workDir: String(request.workDir ?? "").trim() || "",
-            status: "waiting",
-            decision: "wait",
-            reason: "",
-            createdAtMs: now,
-            updatedAtMs: now,
-            expiresAtMs: now + interceptWaitTimeoutMs,
-            decidedBy: "",
-            decidedAtMs: 0,
+            hint: item.hint,
           };
-          store.intercepts.requests[id] = item;
-          appendEntry(store.intercepts.state, `Intercepted: ${tool} (${id})`);
-          console.log(`[sync-server][intercept] queued id=${id} tool=${tool} total=${store.intercepts.state.total}`);
-        }
+          state.msg = item.msg;
 
-        const preDecision = resolvePretoolDecision(tool);
-        if (preDecision === "allow") {
-          item.status = "approved";
-          item.decision = "allow";
-          item.reason = item.reason || "auto allowed by server policy";
-          console.log(`[sync-server][intercept] auto allow id=${id} tool=${tool}`);
-        } else if (preDecision === "deny") {
-          item.status = "denied";
-          item.decision = "deny";
-          item.reason = item.reason || "auto denied by server policy";
-          console.log(`[sync-server][intercept] auto deny id=${id} tool=${tool}`);
-        } else {
-          item.status = "waiting";
-          item.decision = "wait";
-          item.reason = item.reason || "waiting for manual decision";
-          item.expiresAtMs = now + interceptWaitTimeoutMs;
-          console.log(
-            `[sync-server][intercept] waiting manual decision id=${id} tool=${tool} expiresInMs=${interceptWaitTimeoutMs}`,
-          );
-        }
+          if (!isNew) {
+            appendEntry(state, `Re-intercepted: ${tool} (${id})`);
+          }
 
-        item.updatedAtMs = now;
-        store.intercepts.state.prompt = {
-          id,
-          tool,
-          hint: item.hint,
-        };
-        store.intercepts.state.msg = item.msg;
+          if (item.status === "approved") {
+            appendEntry(state, `Auto allow: ${tool} (${id})`);
+          }
+          if (item.status === "denied") {
+            appendEntry(state, `Auto deny: ${tool} (${id})`);
+          }
 
-        if (!isNew) {
-          appendEntry(store.intercepts.state, `Re-intercepted: ${tool} (${id})`);
-        }
+          updateStateCounters(state);
+          saveRequestToDb(storeDb, item);
+          saveStateToDb(storeDb, state);
 
-        if (item.status === "approved") {
-          appendEntry(store.intercepts.state, `Auto allow: ${tool} (${id})`);
-        }
-        if (item.status === "denied") {
-          appendEntry(store.intercepts.state, `Auto deny: ${tool} (${id})`);
-        }
-
-        updateStateCounters(store.intercepts);
-        saveStore(store);
+          return {
+            item,
+            state,
+          };
+        });
 
         return json(res, 200, {
           ok: true,
           id,
-          decision: item.decision,
-          status: item.status,
-          reason: item.reason,
+          decision: result.item.decision,
+          status: result.item.status,
+          reason: result.item.reason,
           pollAfterMs: interceptPollAfterMs,
-          expiresInMs: Math.max(0, Number(item.expiresAtMs ?? now) - now),
-          msg: item.msg,
-          state: toPublicInterceptState(store.intercepts.state),
+          expiresInMs: Math.max(0, Number(result.item.expiresAtMs ?? now) - now),
+          msg: result.item.msg,
+          state: toPublicInterceptState(result.state),
         });
       }
 
@@ -686,14 +1176,27 @@ const server = createServer(async (req, res) => {
           return json(res, 400, { error: "id is required" });
         }
 
-        const store = loadStore();
-        const item = maybeExpireRequest(store.intercepts, id);
+        const item = withTransaction(() => {
+          const state = loadStateFromDb(storeDb);
+          const nextItem = getRequestById(storeDb, id);
+          if (!nextItem) {
+            return null;
+          }
+
+          const previousStatus = nextItem.status;
+          const previousUpdatedAtMs = nextItem.updatedAtMs;
+          maybeExpireRequest(state, nextItem);
+          if (nextItem.status !== previousStatus || nextItem.updatedAtMs !== previousUpdatedAtMs) {
+            saveRequestToDb(storeDb, nextItem);
+            saveStateToDb(storeDb, state);
+          }
+          return nextItem;
+        });
+
         if (!item) {
           return notFound(res);
         }
 
-        updateStateCounters(store.intercepts);
-        saveStore(store);
         return json(res, 200, {
           id: item.id,
           status: item.status,
@@ -718,42 +1221,54 @@ const server = createServer(async (req, res) => {
           return json(res, 400, { error: "decision must be allow or deny" });
         }
 
-        const store = loadStore();
-        const item = maybeExpireRequest(store.intercepts, id);
-        if (!item) {
+        const result = withTransaction(() => {
+          const state = loadStateFromDb(storeDb);
+          const item = getRequestById(storeDb, id);
+          if (!item) {
+            return null;
+          }
+
+          maybeExpireRequest(state, item);
+
+          const now = Date.now();
+          const finalDecision = ["allow", "approved"].includes(decision) ? "allow" : "deny";
+          item.status = finalDecision === "allow" ? "approved" : "denied";
+          item.decision = finalDecision;
+          item.reason = String(body?.reason ?? "").trim() || `manual ${finalDecision}`;
+          item.decidedBy = String(body?.decidedBy ?? body?.operator ?? "").trim() || "manual";
+          item.decidedAtMs = now;
+          item.updatedAtMs = now;
+
+          console.log(
+            `[sync-server][intercept] manual decision id=${item.id} tool=${item.tool} decision=${finalDecision} by=${item.decidedBy}`,
+          );
+
+          state.msg = `Manual ${finalDecision}: ${item.tool}`;
+          state.prompt = {
+            id: item.id,
+            tool: item.tool,
+            hint: item.hint,
+          };
+          appendEntry(state, `Manual ${finalDecision}: ${item.tool} (${item.id})`);
+
+          updateStateCounters(state);
+          saveRequestToDb(storeDb, item);
+          saveStateToDb(storeDb, state);
+
+          return { item, state };
+        });
+
+        if (!result) {
           return notFound(res);
         }
 
-        const now = Date.now();
-        const finalDecision = ["allow", "approved"].includes(decision) ? "allow" : "deny";
-        item.status = finalDecision === "allow" ? "approved" : "denied";
-        item.decision = finalDecision;
-        item.reason = String(body?.reason ?? "").trim() || `manual ${finalDecision}`;
-        item.decidedBy = String(body?.decidedBy ?? body?.operator ?? "").trim() || "manual";
-        item.decidedAtMs = now;
-        item.updatedAtMs = now;
-
-        console.log(
-          `[sync-server][intercept] manual decision id=${item.id} tool=${item.tool} decision=${finalDecision} by=${item.decidedBy}`,
-        );
-
-        store.intercepts.state.msg = `Manual ${finalDecision}: ${item.tool}`;
-        store.intercepts.state.prompt = {
-          id: item.id,
-          tool: item.tool,
-          hint: item.hint,
-        };
-        appendEntry(store.intercepts.state, `Manual ${finalDecision}: ${item.tool} (${item.id})`);
-
-        updateStateCounters(store.intercepts);
-        saveStore(store);
         return json(res, 200, {
           ok: true,
-          id: item.id,
-          status: item.status,
-          decision: item.decision,
-          reason: item.reason,
-          state: toPublicInterceptState(store.intercepts.state),
+          id: result.item.id,
+          status: result.item.status,
+          decision: result.item.decision,
+          reason: result.item.reason,
+          state: toPublicInterceptState(result.state),
         });
       }
 
@@ -764,82 +1279,86 @@ const server = createServer(async (req, res) => {
           return json(res, 400, { error: "invalid event payload" });
         }
 
-        const store = loadStore();
-        refreshTodayTokens(store.intercepts.state);
+        const state = withTransaction(() => {
+          const nextState = loadStateFromDb(storeDb);
+          refreshTodayTokens(nextState);
 
-        const msg = String(event.msg ?? "").trim();
-        if (msg) {
-          store.intercepts.state.msg = msg;
-        }
-
-        const entry = String(event.entry ?? "").trim();
-        if (entry) {
-          appendEntry(store.intercepts.state, entry);
-        }
-
-        if (event.prompt && typeof event.prompt === "object") {
-          store.intercepts.state.prompt = {
-            id: String(event.prompt.id ?? "").trim(),
-            tool: String(event.prompt.tool ?? "").trim(),
-            hint: String(event.prompt.hint ?? "").trim(),
-          };
-        }
-
-        if (Array.isArray(event.entries)) {
-          replaceEntries(store.intercepts.state, event.entries);
-        }
-
-        if (event.state && typeof event.state === "object") {
-          const nextTotal = Number.parseInt(String(event.state.total ?? ""), 10);
-          if (Number.isFinite(nextTotal) && nextTotal >= 0) {
-            store.intercepts.state.total = nextTotal;
+          const msg = String(event.msg ?? "").trim();
+          if (msg) {
+            nextState.msg = msg;
           }
 
-          const nextRunning = Number.parseInt(String(event.state.running ?? ""), 10);
-          if (Number.isFinite(nextRunning) && nextRunning >= 0) {
-            store.intercepts.state.running = nextRunning;
+          const entry = String(event.entry ?? "").trim();
+          if (entry) {
+            appendEntry(nextState, entry);
           }
 
-          const nextWaiting = Number.parseInt(String(event.state.waiting ?? ""), 10);
-          if (Number.isFinite(nextWaiting) && nextWaiting >= 0) {
-            store.intercepts.state.waiting = nextWaiting;
+          if (event.prompt && typeof event.prompt === "object") {
+            nextState.prompt = {
+              id: String(event.prompt.id ?? "").trim(),
+              tool: String(event.prompt.tool ?? "").trim(),
+              hint: String(event.prompt.hint ?? "").trim(),
+            };
           }
 
-          if (typeof event.state.completed === "boolean") {
-            store.intercepts.state.completed = event.state.completed;
+          if (Array.isArray(event.entries)) {
+            replaceEntries(nextState, event.entries);
           }
-        }
 
-        if (event.toolCall && typeof event.toolCall === "object") {
-          appendToolCall(store.intercepts, event.toolCall);
-        }
+          if (event.state && typeof event.state === "object") {
+            const nextTotal = Number.parseInt(String(event.state.total ?? ""), 10);
+            if (Number.isFinite(nextTotal) && nextTotal >= 0) {
+              nextState.total = nextTotal;
+            }
 
-        const tokens = Number.parseInt(String(event.tokens ?? "0"), 10);
-        if (Number.isFinite(tokens) && tokens > 0) {
-          store.intercepts.state.tokens += tokens;
-          store.intercepts.state.tokens_today += tokens;
-        }
+            const nextRunning = Number.parseInt(String(event.state.running ?? ""), 10);
+            if (Number.isFinite(nextRunning) && nextRunning >= 0) {
+              nextState.running = nextRunning;
+            }
 
-        if (event.tokenEstimate && typeof event.tokenEstimate === "object") {
-          store.intercepts.state.last_token_estimate = {
-            sessionId: String(event.tokenEstimate.sessionId ?? "").trim(),
-            promptTokens: Number.parseInt(String(event.tokenEstimate.promptTokens ?? "0"), 10) || 0,
-            outputTokens: Number.parseInt(String(event.tokenEstimate.outputTokens ?? "0"), 10) || 0,
-            totalTokens: Number.parseInt(String(event.tokenEstimate.totalTokens ?? tokens ?? "0"), 10) || 0,
-            promptPreview: String(event.tokenEstimate.promptPreview ?? ""),
-            outputPreview: String(event.tokenEstimate.outputPreview ?? ""),
-            estimatedAtMs: Number.parseInt(String(event.tokenEstimate.estimatedAtMs ?? Date.now()), 10) || Date.now(),
-          };
-        }
+            const nextWaiting = Number.parseInt(String(event.state.waiting ?? ""), 10);
+            if (Number.isFinite(nextWaiting) && nextWaiting >= 0) {
+              nextState.waiting = nextWaiting;
+            }
 
-        if (event.completed === true) {
-          store.intercepts.state.completed = true;
-          store.intercepts.state.last_completed_at_ms = Date.now();
-        }
+            if (typeof event.state.completed === "boolean") {
+              nextState.completed = event.state.completed;
+            }
+          }
 
-        updateStateCounters(store.intercepts);
-        saveStore(store);
-        return json(res, 200, { ok: true, state: toPublicInterceptState(store.intercepts.state) });
+          if (event.toolCall && typeof event.toolCall === "object") {
+            insertToolCallToDb(storeDb, event.toolCall);
+          }
+
+          const tokens = Number.parseInt(String(event.tokens ?? "0"), 10);
+          if (Number.isFinite(tokens) && tokens > 0) {
+            nextState.tokens += tokens;
+            nextState.tokens_today += tokens;
+          }
+
+          if (event.tokenEstimate && typeof event.tokenEstimate === "object") {
+            nextState.last_token_estimate = {
+              sessionId: String(event.tokenEstimate.sessionId ?? "").trim(),
+              promptTokens: Number.parseInt(String(event.tokenEstimate.promptTokens ?? "0"), 10) || 0,
+              outputTokens: Number.parseInt(String(event.tokenEstimate.outputTokens ?? "0"), 10) || 0,
+              totalTokens: Number.parseInt(String(event.tokenEstimate.totalTokens ?? tokens ?? "0"), 10) || 0,
+              promptPreview: String(event.tokenEstimate.promptPreview ?? ""),
+              outputPreview: String(event.tokenEstimate.outputPreview ?? ""),
+              estimatedAtMs: Number.parseInt(String(event.tokenEstimate.estimatedAtMs ?? Date.now()), 10) || Date.now(),
+            };
+          }
+
+          if (event.completed === true) {
+            nextState.completed = true;
+            nextState.last_completed_at_ms = Date.now();
+          }
+
+          updateStateCounters(nextState);
+          saveStateToDb(storeDb, nextState);
+          return nextState;
+        });
+
+        return json(res, 200, { ok: true, state: toPublicInterceptState(state) });
       }
 
       return notFound(res);
