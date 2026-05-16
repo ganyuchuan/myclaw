@@ -2,6 +2,21 @@
 
 ## 2026-05-16
 
+### 13) Intercept hint 组装取消字符截断
+
+变更目标：
+- 在 `generateInterceptHintWithTemplate` 组装 hint 时，不再按固定字符长度截断。
+- 保留更完整的 `view/bash/apply_patch` hint 内容，便于审批端查看原始意图。
+
+主要改动：
+- `src/tool/copilot.ts`
+  - 调整 `truncateForViewPath`：改为仅做字符串归一化（`String(...).trim()`），不再执行 `前9...后9` 截断。
+  - 调整 `truncateForHintValue`：改为仅做字符串归一化（`String(...).trim()`），不再执行 `前18...` 截断。
+  - `generateInterceptHintWithTemplate` 下游 `view/bash/apply_patch` hint 输出改为完整内容（仅去首尾空白）。
+
+验证记录：
+- `npm run build`：通过
+
 ### 12) Intercept hint 生成日志增强 + 飞书审核完成卡片 hint 修复
 
 变更目标：

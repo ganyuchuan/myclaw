@@ -299,24 +299,12 @@ function estimateConversationTokenBreakdown({ prompt, output, entries = [] }) {
 
 function truncateForViewPath(value) {
   const text = String(value ?? "").trim();
-  if (!text) {
-    return "";
-  }
-  if (text.length <= 20) {
-    return text;
-  }
-  return `${text.slice(0, 9)}...${text.slice(-9)}`;
+  return text;
 }
 
 function truncateForHintValue(value) {
   const text = String(value ?? "").trim();
-  if (!text) {
-    return "";
-  }
-  if (text.length <= 20) {
-    return text;
-  }
-  return `${text.slice(0, 18)}...`;
+  return text;
 }
 
 function summarizeHintArgsForLog(toolArgs) {
