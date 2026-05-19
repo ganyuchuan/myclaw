@@ -1,5 +1,36 @@
 # Development Log
 
+## 2026-05-19
+
+### 16) Token 估算模块化 + 缺口补齐（含工具调用 token）
+
+变更目标：
+- 将 token 估算从 copilot 工具实现中抽离为可复用模块，便于后续在 claude 路径复用。
+- 补齐剩余估算缺口，重点覆盖工具调用参数/结果 token、失败路径、重试上下文与会话上下文累计。
+
+主要改动：
+- `src/tool/token-estimate.ts`
+  - 新增独立估算模块，统一承载文本与结构化内容估算。
+  - 新增 `estimateContentTokens`：支持从对象/数组递归提取可读文本并估算 token。
+  - 新增 `estimateToolCallTokens`：分别估算工具调用的 args/result token，并输出预览摘要。
+  - 保留 `estimateConversationTokenBreakdown` 作为会话级 prompt/output 基线估算。
+- `src/tool/copilot.ts`
+  - 接入新模块，移除本地重复估算实现。
+  - 新增会话级 token 跟踪：
+    - 每轮工具调用次数与 args/result token 累计。
+    - 会话上下文 carry-over token 累计。
+    - 请求固定开销与每次工具调用额外开销估算。
+  - 扩展 token 上报字段：
+    - `toolCallCount`、`toolArgsTokens`、`toolResultTokens`、`toolTokens`
+    - `contextCarryoverTokens`、`requestOverheadTokens`、`turnTokens`
+    - `totalEstimatedTokens`（总估算）
+  - 失败路径/重试路径补齐 token 上报，包含 `attempt`、`retryPlanned`、`failureReason`。
+  - `streaming` 回退补齐：即使未注册 `onDelta`，也会累计 delta 作为输出回退来源。
+  - 会话断开/stop 时清理 token 跟踪状态，避免跨会话污染。
+
+验证记录：
+- `npm run build`：通过
+
 ## 2026-05-16
 
 ### 15) sync server 存储从 JSON 切换到 SQLite

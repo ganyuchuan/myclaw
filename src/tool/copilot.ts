@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { getSkillDirectoriesForSession } from "./skills.js";
 import { loadMcpServersForCopilot } from "./mcp.js";
+import { estimateConversationTokenBreakdown, estimateToolCallTokens } from "./token-estimate.js";
 
 const DEFAULT_SHARED_SESSION_KEY = "__global__";
 
@@ -12,12 +13,126 @@ let sdkClientCwd = "";
 let sharedSessions = new Map();
 let sharedCopilotSessionIds = new Map();
 let sharedSkillSignatures = new Map();
+let sessionTurnToolStats = new Map();
+let sessionContextCarryoverTokens = new Map();
 const sessionLifecycleState = {
   total: 0,
   running: 0,
   waiting: 0,
   completed: false,
 };
+const DEFAULT_REQUEST_OVERHEAD_TOKENS = 80;
+const PER_TOOL_CALL_OVERHEAD_TOKENS = 24;
+const MAX_SESSION_CARRYOVER_TOKENS = 240000;
+
+function normalizeSessionId(sessionId) {
+  return String(sessionId ?? "").trim();
+}
+
+function createEmptyTurnToolStats() {
+  return {
+    toolCallCount: 0,
+    toolArgsTokens: 0,
+    toolResultTokens: 0,
+    toolEntries: [],
+  };
+}
+
+function ensureTurnToolStats(sessionId) {
+  const normalizedSessionId = normalizeSessionId(sessionId);
+  if (!normalizedSessionId) {
+    return createEmptyTurnToolStats();
+  }
+
+  const existing = sessionTurnToolStats.get(normalizedSessionId);
+  if (existing) {
+    return existing;
+  }
+
+  const created = createEmptyTurnToolStats();
+  sessionTurnToolStats.set(normalizedSessionId, created);
+  return created;
+}
+
+function consumeTurnToolStats(sessionId) {
+  const normalizedSessionId = normalizeSessionId(sessionId);
+  if (!normalizedSessionId) {
+    return createEmptyTurnToolStats();
+  }
+
+  const existing = sessionTurnToolStats.get(normalizedSessionId);
+  if (!existing) {
+    return createEmptyTurnToolStats();
+  }
+
+  sessionTurnToolStats.set(normalizedSessionId, createEmptyTurnToolStats());
+  return existing;
+}
+
+function clearSessionTokenTracking(sessionId) {
+  const normalizedSessionId = normalizeSessionId(sessionId);
+  if (!normalizedSessionId) {
+    return;
+  }
+  sessionTurnToolStats.delete(normalizedSessionId);
+  sessionContextCarryoverTokens.delete(normalizedSessionId);
+}
+
+function getSessionCarryoverTokens(sessionId) {
+  const normalizedSessionId = normalizeSessionId(sessionId);
+  if (!normalizedSessionId) {
+    return 0;
+  }
+  const value = Number(sessionContextCarryoverTokens.get(normalizedSessionId) ?? 0);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function setSessionCarryoverTokens(sessionId, tokens) {
+  const normalizedSessionId = normalizeSessionId(sessionId);
+  if (!normalizedSessionId) {
+    return;
+  }
+
+  const normalized = Math.max(0, Math.min(MAX_SESSION_CARRYOVER_TOKENS, Number(tokens) || 0));
+  if (normalized <= 0) {
+    sessionContextCarryoverTokens.delete(normalizedSessionId);
+    return;
+  }
+  sessionContextCarryoverTokens.set(normalizedSessionId, normalized);
+}
+
+function recordToolUsageForSession({ sessionId, toolName, toolArgs, toolResult }) {
+  const normalizedSessionId = normalizeSessionId(sessionId);
+  if (!normalizedSessionId) {
+    return;
+  }
+
+  const breakdown = estimateToolCallTokens({
+    toolName,
+    toolArgs,
+    toolResult,
+  });
+
+  const stats = ensureTurnToolStats(normalizedSessionId);
+  stats.toolCallCount += 1;
+  stats.toolArgsTokens += breakdown.argsTokens;
+  stats.toolResultTokens += breakdown.resultTokens;
+  stats.toolEntries.push(
+    truncateString(
+      `tool=${breakdown.toolName} argsTokens=${breakdown.argsTokens} resultTokens=${breakdown.resultTokens} args=${breakdown.argsPreview} result=${breakdown.resultPreview}`,
+      500,
+    ),
+  );
+
+  if (stats.toolEntries.length > 20) {
+    stats.toolEntries = stats.toolEntries.slice(-20);
+  }
+}
+
+function estimateRequestOverheadTokens({ toolCallCount }) {
+  const normalizedToolCallCount = Math.max(0, Number(toolCallCount) || 0);
+  return DEFAULT_REQUEST_OVERHEAD_TOKENS + (normalizedToolCallCount * PER_TOOL_CALL_OVERHEAD_TOKENS);
+}
 
 function normalizeSessionKey(sessionKey) {
   const normalized = String(sessionKey ?? "").trim();
@@ -41,9 +156,11 @@ function setSharedSessionIdForKey(sessionKey, sessionId) {
 async function disconnectSharedSessionForKey(sessionKey) {
   const key = normalizeSessionKey(sessionKey);
   const existing = sharedSessions.get(key);
+  const trackedSessionId = normalizeSessionId(existing?.sessionId) || getSharedSessionIdForKey(key);
   if (existing) {
     await existing.disconnect().catch(() => {});
   }
+  clearSessionTokenTracking(trackedSessionId);
   sharedSessions.delete(key);
   sharedSkillSignatures.delete(key);
   sharedSessionQueues.delete(key);
@@ -235,66 +352,6 @@ function truncateString(value, maxLength = 240) {
     return text;
   }
   return `${text.slice(0, Math.max(0, maxLength - 3))}...`;
-}
-
-function estimateTextTokens(value) {
-  const text = String(value ?? "").trim();
-  if (!text) {
-    return 0;
-  }
-
-  const cjkChars = (text.match(/[\u3400-\u9FFF\uF900-\uFAFF]/g) || []).length;
-  const asciiChars = text.length - cjkChars;
-  const asciiTokens = Math.ceil(Math.max(0, asciiChars) / 4);
-  return Math.max(1, cjkChars + asciiTokens);
-}
-
-function estimateConversationTokens({ prompt, output, entries = [] }) {
-  const promptTokens = estimateTextTokens(prompt);
-  const outputTokens = estimateTextTokens(output);
-  const entryTokens = Array.isArray(entries)
-    ? entries.reduce((total, item) => total + estimateTextTokens(item), 0)
-    : 0;
-
-  // Prefer the explicit prompt and final output. Entries are used only as a fallback
-  // because they can overlap with prompt/output content depending on the hook payload.
-  const baseTokens = promptTokens + outputTokens;
-  if (baseTokens > 0) {
-    return baseTokens;
-  }
-
-  return entryTokens;
-}
-
-function estimateConversationTokenBreakdown({ prompt, output, entries = [] }) {
-  const promptText = String(prompt ?? "").trim();
-  const outputText = String(output ?? "").trim();
-  const promptTokens = estimateTextTokens(promptText);
-  const outputTokens = estimateTextTokens(outputText);
-  const totalTokens = promptTokens + outputTokens;
-
-  if (totalTokens > 0) {
-    return {
-      promptTokens,
-      outputTokens,
-      totalTokens,
-      promptPreview: truncateString(promptText, 160),
-      outputPreview: truncateString(outputText, 160),
-    };
-  }
-
-  const fallbackEntries = Array.isArray(entries)
-    ? entries.map((item) => String(item ?? "").trim()).filter(Boolean)
-    : [];
-  const fallbackText = fallbackEntries.join("\n");
-  const fallbackTokens = estimateConversationTokens({ prompt, output, entries });
-  return {
-    promptTokens: 0,
-    outputTokens: 0,
-    totalTokens: fallbackTokens,
-    promptPreview: "",
-    outputPreview: truncateString(fallbackText, 160),
-  };
 }
 
 function truncateForViewPath(value) {
@@ -743,6 +800,15 @@ async function reportSessionTokenEstimateEvent({
   config,
   workDir,
   entries = [],
+  status = "completed",
+  failureReason = "",
+  attempt = 1,
+  retryPlanned = false,
+  toolCallCount = 0,
+  toolArgsTokens = 0,
+  toolResultTokens = 0,
+  contextCarryoverTokens = 0,
+  requestOverheadTokens = 0,
 }) {
   const interceptServerUrl = trimTrailingSlash(config.interceptServerUrl);
   if (!config.interceptEnabled || !interceptServerUrl) {
@@ -750,7 +816,11 @@ async function reportSessionTokenEstimateEvent({
   }
 
   const breakdown = estimateConversationTokenBreakdown({ prompt, output, entries });
-  const tokens = breakdown.totalTokens;
+  const toolTokens = Math.max(0, Number(toolArgsTokens) || 0) + Math.max(0, Number(toolResultTokens) || 0);
+  const carryoverTokens = Math.max(0, Number(contextCarryoverTokens) || 0);
+  const overheadTokens = Math.max(0, Number(requestOverheadTokens) || 0);
+  const turnTokens = breakdown.totalTokens + toolTokens + overheadTokens;
+  const tokens = turnTokens + carryoverTokens;
   if (tokens <= 0) {
     return;
   }
@@ -772,26 +842,38 @@ async function reportSessionTokenEstimateEvent({
     timeoutMs: interceptTimeoutMs,
     body: JSON.stringify({
       event: {
-        msg: `Session tokens estimated: ${sessionId || "-"}`,
-        entry: `Session tokens estimated: ${sessionId || "-"} (${tokens})`,
+        msg: `Session tokens estimated (${status}): ${sessionId || "-"}`,
+        entry: `Session tokens estimated (${status}): ${sessionId || "-"} (${tokens})`,
         tokens,
         tokenEstimate: {
           sessionId,
+          status,
           promptTokens: breakdown.promptTokens,
           outputTokens: breakdown.outputTokens,
+          toolCallCount: Math.max(0, Number(toolCallCount) || 0),
+          toolArgsTokens: Math.max(0, Number(toolArgsTokens) || 0),
+          toolResultTokens: Math.max(0, Number(toolResultTokens) || 0),
+          toolTokens,
+          contextCarryoverTokens: carryoverTokens,
+          requestOverheadTokens: overheadTokens,
+          turnTokens,
           totalTokens: breakdown.totalTokens,
+          totalEstimatedTokens: tokens,
           promptPreview: breakdown.promptPreview,
           outputPreview: breakdown.outputPreview,
+          attempt,
+          retryPlanned,
+          failureReason: truncateString(failureReason, 240),
           estimatedAtMs: Date.now(),
         },
         prompt: {
           id: sessionId || `tokens_${crypto.randomUUID()}`,
           tool: "session",
-          hint: `Estimated tokens for completed Copilot session: ${tokens}`,
+          hint: `Estimated tokens for Copilot session (${status}): ${tokens}`,
         },
         session: {
           id: sessionId,
-          phase: "token-estimate",
+          phase: status === "failed" ? "token-estimate-failed" : "token-estimate",
           ts: Date.now(),
           workDir,
         },
@@ -1035,6 +1117,13 @@ function buildCopilotHooks(config) {
       const safeResult = safeCloneToolArgs(input?.toolResult);
       const sessionId = String(invocation?.sessionId ?? input?.sessionId ?? "").trim() || "-";
 
+      recordToolUsageForSession({
+        sessionId,
+        toolName,
+        toolArgs: safeArgs,
+        toolResult: safeResult,
+      });
+
       console.log(`[${sessionId}] Tool: ${toolName}`);
       console.log(`  Args: ${safeStringify(safeArgs)}`);
       console.log(`  Result: ${safeStringify(safeResult)}`);
@@ -1158,6 +1247,24 @@ function isSessionNotFoundError(error) {
   return message.includes("session not found");
 }
 
+function getErrorMessage(error) {
+  return String(error?.message ?? error).trim() || "unknown error";
+}
+
+function getErrorPartialOutput(error) {
+  return String(error?.partialOutput ?? "").trim();
+}
+
+function getErrorSessionId(error) {
+  return String(error?.sessionId ?? "").trim();
+}
+
+function mergeEntries(baseEntries, toolEntries = []) {
+  const normalizedBase = Array.isArray(baseEntries) ? baseEntries : [];
+  const normalizedTools = Array.isArray(toolEntries) ? toolEntries : [];
+  return [...normalizedBase, ...normalizedTools].slice(-80);
+}
+
 async function createOrResumeSession({ client, config, resumeSessionId = "" }) {
   const sessionConfig = await buildSessionConfig(config);
 
@@ -1175,16 +1282,16 @@ async function runSessionPrompt({ session, prompt, timeoutMs, onDelta, onDone })
   );
 
   let streamedOutput = "";
-  const unsubscribeDelta = typeof onDelta === "function"
-    ? session.on("assistant.message_delta", (event) => {
-        const delta = String(event?.data?.deltaContent ?? "");
-        if (!delta) {
-          return;
-        }
-        streamedOutput += delta;
-        onDelta(delta);
-      })
-    : null;
+  const unsubscribeDelta = session.on("assistant.message_delta", (event) => {
+    const delta = String(event?.data?.deltaContent ?? "");
+    if (!delta) {
+      return;
+    }
+    streamedOutput += delta;
+    if (typeof onDelta === "function") {
+      onDelta(delta);
+    }
+  });
 
   try {
     const event = await session.sendAndWait({ prompt }, timeoutMs);
@@ -1200,6 +1307,11 @@ async function runSessionPrompt({ session, prompt, timeoutMs, onDelta, onDone })
       onDone(result);
     }
     return result;
+  } catch (error) {
+    const enrichedError = error && typeof error === "object" ? error : new Error(String(error ?? "unknown error"));
+    enrichedError.partialOutput = streamedOutput.trim();
+    enrichedError.sessionId = session.sessionId;
+    throw enrichedError;
   } finally {
     if (unsubscribeDelta) {
       unsubscribeDelta();
@@ -1244,8 +1356,10 @@ export async function runCopilotWithSession({
   const client = await ensureSdkClient(config);
   let effectiveResumeSessionId = resumeSessionId;
   let retried = false;
+  let attempt = 0;
 
   while (true) {
+    attempt += 1;
     const session = await createOrResumeSession({
       client,
       config,
@@ -1261,6 +1375,12 @@ export async function runCopilotWithSession({
         onDone,
       });
 
+      const toolStats = consumeTurnToolStats(result.sessionId);
+      const carryoverTokens = getSessionCarryoverTokens(result.sessionId);
+      const requestOverheadTokens = estimateRequestOverheadTokens({
+        toolCallCount: toolStats.toolCallCount,
+      });
+
       try {
         await reportSessionTokenEstimateEvent({
           sessionId: result.sessionId,
@@ -1268,7 +1388,12 @@ export async function runCopilotWithSession({
           output: result.output,
           config,
           workDir: config.workDir || process.cwd(),
-          entries: [prompt, result.output],
+          entries: mergeEntries([prompt, result.output], toolStats.toolEntries),
+          toolCallCount: toolStats.toolCallCount,
+          toolArgsTokens: toolStats.toolArgsTokens,
+          toolResultTokens: toolStats.toolResultTokens,
+          contextCarryoverTokens: carryoverTokens,
+          requestOverheadTokens,
         });
       } catch (error) {
         console.warn(
@@ -1276,9 +1401,56 @@ export async function runCopilotWithSession({
         );
       }
 
+      const breakdown = estimateConversationTokenBreakdown({
+        prompt,
+        output: result.output,
+        entries: mergeEntries([prompt, result.output], toolStats.toolEntries),
+      });
+      const turnTokenContribution = breakdown.totalTokens
+        + toolStats.toolArgsTokens
+        + toolStats.toolResultTokens
+        + requestOverheadTokens;
+      setSessionCarryoverTokens(result.sessionId, carryoverTokens + turnTokenContribution);
+
       return result;
     } catch (error) {
-      if (!retried && isSessionNotFoundError(error)) {
+      const shouldRetry = !retried && isSessionNotFoundError(error);
+      const failedSessionId = getErrorSessionId(error) || effectiveResumeSessionId;
+      const toolStats = consumeTurnToolStats(failedSessionId);
+      const carryoverTokens = getSessionCarryoverTokens(failedSessionId);
+      const requestOverheadTokens = estimateRequestOverheadTokens({
+        toolCallCount: toolStats.toolCallCount,
+      });
+
+      try {
+        await reportSessionTokenEstimateEvent({
+          sessionId: failedSessionId,
+          prompt,
+          output: getErrorPartialOutput(error),
+          config,
+          workDir: config.workDir || process.cwd(),
+          entries: mergeEntries([prompt, getErrorPartialOutput(error), `error: ${getErrorMessage(error)}`], toolStats.toolEntries),
+          status: "failed",
+          failureReason: getErrorMessage(error),
+          attempt,
+          retryPlanned: shouldRetry,
+          toolCallCount: toolStats.toolCallCount,
+          toolArgsTokens: toolStats.toolArgsTokens,
+          toolResultTokens: toolStats.toolResultTokens,
+          contextCarryoverTokens: carryoverTokens,
+          requestOverheadTokens,
+        });
+      } catch (reportError) {
+        console.warn(
+          `[copilot-sdk][intercept] token estimate upload failed sessionId=${getErrorSessionId(error) || "-"} reason=${String(reportError?.message ?? reportError)}`,
+        );
+      }
+
+      if (!shouldRetry) {
+        clearSessionTokenTracking(failedSessionId);
+      }
+
+      if (shouldRetry) {
         retried = true;
         effectiveResumeSessionId = "";
         console.warn("[copilot-sdk] session not found, retry once with a new session");
@@ -1368,8 +1540,10 @@ export async function runCopilotWithSharedSession({
 
   return withSharedSessionLock(key, async () => {
     let retried = false;
+    let attempt = 0;
 
     while (true) {
+      attempt += 1;
       try {
         const session = await getOrCreateSharedSession(config, key);
         const result = await runSessionPrompt({
@@ -1380,6 +1554,12 @@ export async function runCopilotWithSharedSession({
           onDone,
         });
 
+        const toolStats = consumeTurnToolStats(result.sessionId);
+        const carryoverTokens = getSessionCarryoverTokens(result.sessionId);
+        const requestOverheadTokens = estimateRequestOverheadTokens({
+          toolCallCount: toolStats.toolCallCount,
+        });
+
         try {
           await reportSessionTokenEstimateEvent({
             sessionId: result.sessionId,
@@ -1387,7 +1567,12 @@ export async function runCopilotWithSharedSession({
             output: result.output,
             config,
             workDir: config.workDir || process.cwd(),
-            entries: [prompt, result.output],
+            entries: mergeEntries([prompt, result.output], toolStats.toolEntries),
+            toolCallCount: toolStats.toolCallCount,
+            toolArgsTokens: toolStats.toolArgsTokens,
+            toolResultTokens: toolStats.toolResultTokens,
+            contextCarryoverTokens: carryoverTokens,
+            requestOverheadTokens,
           });
         } catch (error) {
           console.warn(
@@ -1395,12 +1580,55 @@ export async function runCopilotWithSharedSession({
           );
         }
 
+        const breakdown = estimateConversationTokenBreakdown({
+          prompt,
+          output: result.output,
+          entries: mergeEntries([prompt, result.output], toolStats.toolEntries),
+        });
+        const turnTokenContribution = breakdown.totalTokens
+          + toolStats.toolArgsTokens
+          + toolStats.toolResultTokens
+          + requestOverheadTokens;
+        setSessionCarryoverTokens(result.sessionId, carryoverTokens + turnTokenContribution);
+
         setSharedSessionIdForKey(key, result.sessionId);
         return result;
       } catch (error) {
+        const shouldRetry = !retried && isSessionNotFoundError(error);
+        const failedSessionId = getErrorSessionId(error) || getSharedSessionIdForKey(key);
+        const toolStats = consumeTurnToolStats(failedSessionId);
+        const carryoverTokens = getSessionCarryoverTokens(failedSessionId);
+        const requestOverheadTokens = estimateRequestOverheadTokens({
+          toolCallCount: toolStats.toolCallCount,
+        });
+
+        try {
+          await reportSessionTokenEstimateEvent({
+            sessionId: failedSessionId,
+            prompt,
+            output: getErrorPartialOutput(error),
+            config,
+            workDir: config.workDir || process.cwd(),
+            entries: mergeEntries([prompt, getErrorPartialOutput(error), `error: ${getErrorMessage(error)}`], toolStats.toolEntries),
+            status: "failed",
+            failureReason: getErrorMessage(error),
+            attempt,
+            retryPlanned: shouldRetry,
+            toolCallCount: toolStats.toolCallCount,
+            toolArgsTokens: toolStats.toolArgsTokens,
+            toolResultTokens: toolStats.toolResultTokens,
+            contextCarryoverTokens: carryoverTokens,
+            requestOverheadTokens,
+          });
+        } catch (reportError) {
+          console.warn(
+            `[copilot-sdk][intercept] token estimate upload failed sessionId=${getErrorSessionId(error) || getSharedSessionIdForKey(key) || "-"} reason=${String(reportError?.message ?? reportError)}`,
+          );
+        }
+
         await disconnectSharedSessionForKey(key);
 
-        if (!retried && isSessionNotFoundError(error)) {
+        if (shouldRetry) {
           retried = true;
           console.warn("[copilot-sdk] shared session not found, recreate and retry once");
           continue;
@@ -1430,4 +1658,6 @@ export async function stopCopilotClient() {
   sharedCopilotSessionIds = new Map();
   sharedSessionQueues = new Map();
   sharedSkillSignatures = new Map();
+  sessionTurnToolStats = new Map();
+  sessionContextCarryoverTokens = new Map();
 }
