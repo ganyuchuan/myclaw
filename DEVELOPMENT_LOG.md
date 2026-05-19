@@ -2,6 +2,37 @@
 
 ## 2026-05-19
 
+### 17) 移除 LLM 会话链路 + 清理 /agent 与文档配置残留
+
+变更目标：
+- 不再使用历史 `LLM_*` 会话链路，统一走 `agent.ts` 路由（Copilot/Claude provider）。
+- 删除飞书 `/agent` 指令及相关回退逻辑，避免出现双通道行为不一致。
+- 清理 `.env.example` 与 README 中过时的 LLM / `send` / `agent` 协议描述。
+
+主要改动：
+- `src/gateway/server.ts`
+  - 删除 `generateAssistantReply` 依赖。
+  - 删除 WebSocket `send` / `agent` 方法分支。
+  - `METHODS` 中移除 `send`、`agent`，保留统一 `copilot` 入口。
+- `src/model/client.ts`
+  - 删除历史 LLM 客户端模块（chat_completions/responses 适配与回退逻辑）。
+- `src/bridge/feishu.ts`
+  - 删除 `/agent` 命令帮助与路由分支。
+  - 删除与 `/agent` 相关的无用参数传递（`sessionId` 命令链路）。
+  - 非 copilot 模式下保留明确提示，不再走旧会话回退。
+- `.env.example`
+  - 删除全部 `LLM_*` 配置项。
+- `README.md`
+  - 删除 LLM 相关环境变量说明与示例。
+  - 删除 WebSocket 协议中旧 `send` / `agent` 请求示例。
+
+补充改动：
+- `src/tool/claude.ts`
+  - 接入与 Copilot 同口径 token 估算（工具调用、失败路径、carry-over、overhead 维度）。
+
+验证记录：
+- `npm run build`：通过
+
 ### 16) Token 估算模块化 + 缺口补齐（含工具调用 token）
 
 变更目标：

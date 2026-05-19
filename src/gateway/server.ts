@@ -1,7 +1,6 @@
 import { createServer } from "node:http";
 import crypto from "node:crypto";
 import { WebSocketServer } from "ws";
-import { generateAssistantReply } from "../model/client.js";
 import { resetSharedAgentSession, runAgentWithSharedSession } from "../tool/agent.js";
 import { runGitCommand } from "../tool/git.js";
 import { planCronOperation } from "../tool/cron.js";
@@ -17,10 +16,9 @@ import {
   safeParseJson,
 } from "./protocol.js";
 
-const METHODS = ["connect", "send", "agent", "copilot", "git", "sql", "service.list", "service.start", "service.stop", "service.restart", "service.logs", "skills.list", "skills.add", "skills.remove", "mcp.list", "mcp.add", "mcp.remove", "cron.list", "cron.add", "cron.update", "cron.remove", "cron.run", "cron.nl", "health"];
+const METHODS = ["connect", "copilot", "git", "sql", "service.list", "service.start", "service.stop", "service.restart", "service.logs", "skills.list", "skills.add", "skills.remove", "mcp.list", "mcp.add", "mcp.remove", "cron.list", "cron.add", "cron.update", "cron.remove", "cron.run", "cron.nl", "health"];
 
 export function createGatewayServer(config, { cronScheduler } = { cronScheduler: undefined }) {
-  const sessions = new Map();
   const connections = new Map();
 
   const sendEventFrame = (socket, event, payload) => {
@@ -90,7 +88,6 @@ export function createGatewayServer(config, { cronScheduler } = { cronScheduler:
         ok: true,
         service: "myclaw-gateway",
         uptimeSec: Math.floor(process.uptime()),
-        sessions: sessions.size,
         connections: connections.size,
       });
       res.writeHead(200, { "Content-Type": "application/json" });
@@ -109,13 +106,6 @@ export function createGatewayServer(config, { cronScheduler } = { cronScheduler:
       sendEventFrame(state.socket, "tick", { ts: Date.now(), connId });
     }
   }, 10_000);
-
-  const getSession = (sessionId) => {
-    if (!sessions.has(sessionId)) {
-      sessions.set(sessionId, []);
-    }
-    return sessions.get(sessionId);
-  };
 
   const unauthorized = (id) => makeResponse(id, false, undefined, makeError("UNAUTHORIZED", "invalid token"));
   const badRequest = (id, message) => makeResponse(id, false, undefined, makeError("INVALID_REQUEST", message));
@@ -170,63 +160,6 @@ export function createGatewayServer(config, { cronScheduler } = { cronScheduler:
               makeResponse(frame.id, true, {
                 ok: true,
                 uptimeSec: Math.floor(process.uptime()),
-                sessions: sessions.size,
-              }),
-            ),
-          );
-          return;
-        }
-
-        if (frame.method === "send") {
-          const sessionId = String(frame.params?.sessionId ?? "main");
-          const text = String(frame.params?.text ?? "").trim();
-          if (!text) {
-            socket.send(JSON.stringify(badRequest(frame.id, "send.text is required")));
-            return;
-          }
-
-          const history = getSession(sessionId);
-          history.push({ role: "user", content: text, ts: Date.now() });
-
-          socket.send(
-            JSON.stringify(
-              makeResponse(frame.id, true, {
-                accepted: true,
-                sessionId,
-                historySize: history.length,
-              }),
-            ),
-          );
-          return;
-        }
-
-        if (frame.method === "agent") {
-          const sessionId = String(frame.params?.sessionId ?? "main");
-          const text = frame.params?.text ? String(frame.params?.text) : "";
-          const history = getSession(sessionId);
-          if (text.trim()) {
-            history.push({ role: "user", content: text.trim(), ts: Date.now() });
-          }
-
-          const provider = String(config.llm.provider);
-          const model = String(config.llm.model);
-          const messages = history.map((entry) => ({ role: entry.role, content: entry.content }));
-
-          const reply = await generateAssistantReply({
-            messages,
-            llm: config.llm,
-          });
-
-          history.push({ role: "assistant", content: reply, ts: Date.now() });
-
-          socket.send(
-            JSON.stringify(
-              makeResponse(frame.id, true, {
-                sessionId,
-                provider,
-                model,
-                reply,
-                historySize: history.length,
               }),
             ),
           );

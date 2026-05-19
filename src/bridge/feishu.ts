@@ -17,10 +17,6 @@ type GatewayCopilotResponse = {
   output?: string;
 };
 
-type GatewayAgentResponse = {
-  reply?: string;
-};
-
 type WsClientCompat = {
   stop?: () => void;
   disconnect?: () => void;
@@ -762,7 +758,6 @@ function formatCronNlReply(payload) {
 
 async function routeCommand({
   text,
-  sessionId,
   gatewayClient,
   runCopilotRequest,
   copilotCfg,
@@ -802,7 +797,6 @@ async function routeCommand({
       "/mcp list",
       "/mcp add <mcp_config>",
       "/mcp remove <mcp_name>",
-      "/agent <text>",
       "/cron list",
       "/cron run <jobId>",
       "/cron remove <jobId>",
@@ -822,15 +816,6 @@ async function routeCommand({
     }
     const payload = await runCopilotRequest(prompt);
     return String(payload?.output ?? "").trim() || "(empty output)";
-  }
-
-  if (cmd === "/agent") {
-    if (!rest) {
-      throw new Error("usage: /agent <text>");
-    }
-    await gatewayClient.request("send", { sessionId, text: rest });
-    const payload = await gatewayClient.request("agent", { sessionId });
-    return String(payload?.reply ?? "").trim() || "(empty output)";
   }
 
   if (cmd === "/git") {
@@ -1621,9 +1606,6 @@ dispatcher.register({
       }
     }
 
-    const sessionId =
-      chatType === "group" ? `feishu:group:${chatId}` : `feishu:dm:${senderOpenId}`;
-      
     const isCopilot = copilotCfg.enabled;
 
     const reactionEmojiType = resolveReactionEmojiType({
@@ -1701,7 +1683,6 @@ dispatcher.register({
 
       const commandReply = await routeCommand({
         text,
-        sessionId,
         gatewayClient,
         runCopilotRequest,
         copilotCfg,
@@ -1742,9 +1723,7 @@ dispatcher.register({
         if (inbound.kind === "image" || inbound.kind === "file") {
           reply = "当前仅 copilot 模式支持图片/文件处理，请启用 COPILOT_ENABLED=true 后重试。";
         } else {
-          await gatewayClient.request("send", { sessionId, text });
-          const agentPayload = await gatewayClient.request("agent", { sessionId }) as GatewayAgentResponse;
-          reply = String(agentPayload?.reply ?? "").trim();
+          reply = "当前已关闭 agent 会话回退链路，请启用 COPILOT_ENABLED=true 后重试。";
         }
       }
 

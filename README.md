@@ -108,7 +108,6 @@ cp .env.example .env
 按需编辑 `.env` 中以下关键项：
 
 - 网关：`PORT`、`GATEWAY_TOKEN`
-- LLM：`LLM_PROVIDER`、`LLM_PROTOCOL`、`LLM_ENDPOINT`、`LLM_MODEL`、`LLM_API_KEY`
 - 飞书桥接：`FEISHU_*`
 - Cron：`CRON_*`
 - 同步：`SYNC_ENABLED`、`SYNC_SERVER_URL`
@@ -146,12 +145,6 @@ curl http://127.0.0.1:18790/health
 
 - `PORT`: gateway port (default `18789`)
 - `GATEWAY_TOKEN`: required token for websocket connect
-- `LLM_PROVIDER`: provider label (example: `openai`, `doubao`)
-- `LLM_PROTOCOL`: request protocol (`responses` or `chat_completions`)
-- `LLM_ENDPOINT`: API endpoint URL
-- `LLM_MODEL`: model name
-- `LLM_API_KEY`: API key (optional; empty means fallback echo reply)
-- `LLM_STREAM`: stream mode for `chat_completions` (`true`/`false`)
 - `FEISHU_ENABLED`: enable Feishu bridge (`true`/`false`)
 - `FEISHU_APP_ID`: Feishu app id (required when bridge enabled)
 - `FEISHU_APP_SECRET`: Feishu app secret (required when bridge enabled)
@@ -242,28 +235,6 @@ When `FEISHU_INTERCEPT_REVIEW_ENABLED=true`, the bridge will poll `/api/copilot/
 
 Important: the Feishu application must subscribe to `card.action.trigger`, otherwise button clicks will not reach the bridge.
 
-OpenAI Responses example:
-
-```dotenv
-LLM_PROVIDER=openai
-LLM_PROTOCOL=responses
-LLM_ENDPOINT=https://api.openai.com/v1/responses
-LLM_MODEL=gpt-4.1-mini
-LLM_API_KEY=your_openai_key
-LLM_STREAM=false
-```
-
-Doubao ChatCompletions example:
-
-```dotenv
-LLM_PROVIDER=doubao
-LLM_PROTOCOL=chat_completions
-LLM_ENDPOINT=https://ark.cn-beijing.volces.com/api/v3/chat/completions
-LLM_MODEL=doubao-1-5-pro-32k-250115
-LLM_API_KEY=your_doubao_key
-LLM_STREAM=true
-```
-
 ## WebSocket Protocol (MVP)
 
 Connect request (first frame only):
@@ -277,28 +248,6 @@ Connect request (first frame only):
     "auth": { "token": "dev-token" },
     "client": { "id": "demo-cli", "version": "0.1.0" }
   }
-}
-```
-
-Send message into session:
-
-```json
-{
-  "type": "req",
-  "id": "2",
-  "method": "send",
-  "params": { "sessionId": "main", "text": "大语言模型中的 token 是什么？用一句话解释它" }
-}
-```
-
-Ask agent for response:
-
-```json
-{
-  "type": "req",
-  "id": "3",
-  "method": "agent",
-  "params": { "sessionId": "main" }
 }
 ```
 

@@ -1,10 +1,17 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import { estimateConversationTokenBreakdown, estimateToolCallTokens } from "./token-estimate.js";
 
 const DEFAULT_SHARED_SESSION_KEY = "__global__";
 
 let sharedClaudeSessionIds: Map<string, string> = new Map();
 let sharedSessionQueues: Map<string, Promise<any>> = new Map();
+let sessionTurnToolStats: Map<string, any> = new Map();
+let sessionContextCarryoverTokens: Map<string, number> = new Map();
+
+const DEFAULT_REQUEST_OVERHEAD_TOKENS = 80;
+const PER_TOOL_CALL_OVERHEAD_TOKENS = 24;
+const MAX_SESSION_CARRYOVER_TOKENS = 240000;
 
 const DEFAULT_RESTRICTED_DIR_TOOLS = [
   "read",
@@ -105,6 +112,144 @@ function safeStringify(value, fallback = "{}") {
   } catch {
     return fallback;
   }
+}
+
+function truncateString(value, maxLength = 240) {
+  const text = String(value ?? "").trim();
+  if (!text) {
+    return "";
+  }
+  if (text.length <= maxLength) {
+    return text;
+  }
+  return `${text.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
+function normalizeSessionId(sessionId) {
+  return String(sessionId ?? "").trim();
+}
+
+function createEmptyTurnToolStats() {
+  return {
+    toolCallCount: 0,
+    toolArgsTokens: 0,
+    toolResultTokens: 0,
+    toolEntries: [],
+  };
+}
+
+function ensureTurnToolStats(sessionId) {
+  const normalizedSessionId = normalizeSessionId(sessionId);
+  if (!normalizedSessionId) {
+    return createEmptyTurnToolStats();
+  }
+
+  const existing = sessionTurnToolStats.get(normalizedSessionId);
+  if (existing) {
+    return existing;
+  }
+
+  const created = createEmptyTurnToolStats();
+  sessionTurnToolStats.set(normalizedSessionId, created);
+  return created;
+}
+
+function consumeTurnToolStats(sessionId) {
+  const normalizedSessionId = normalizeSessionId(sessionId);
+  if (!normalizedSessionId) {
+    return createEmptyTurnToolStats();
+  }
+
+  const existing = sessionTurnToolStats.get(normalizedSessionId);
+  if (!existing) {
+    return createEmptyTurnToolStats();
+  }
+
+  sessionTurnToolStats.set(normalizedSessionId, createEmptyTurnToolStats());
+  return existing;
+}
+
+function clearSessionTokenTracking(sessionId) {
+  const normalizedSessionId = normalizeSessionId(sessionId);
+  if (!normalizedSessionId) {
+    return;
+  }
+  sessionTurnToolStats.delete(normalizedSessionId);
+  sessionContextCarryoverTokens.delete(normalizedSessionId);
+}
+
+function getSessionCarryoverTokens(sessionId) {
+  const normalizedSessionId = normalizeSessionId(sessionId);
+  if (!normalizedSessionId) {
+    return 0;
+  }
+  const value = Number(sessionContextCarryoverTokens.get(normalizedSessionId) ?? 0);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function setSessionCarryoverTokens(sessionId, tokens) {
+  const normalizedSessionId = normalizeSessionId(sessionId);
+  if (!normalizedSessionId) {
+    return;
+  }
+
+  const normalized = Math.max(0, Math.min(MAX_SESSION_CARRYOVER_TOKENS, Number(tokens) || 0));
+  if (normalized <= 0) {
+    sessionContextCarryoverTokens.delete(normalizedSessionId);
+    return;
+  }
+  sessionContextCarryoverTokens.set(normalizedSessionId, normalized);
+}
+
+function recordToolUsageForSession({ sessionId, toolName, toolArgs, toolResult }) {
+  const normalizedSessionId = normalizeSessionId(sessionId);
+  if (!normalizedSessionId) {
+    return;
+  }
+
+  const breakdown = estimateToolCallTokens({
+    toolName,
+    toolArgs,
+    toolResult,
+  });
+
+  const stats = ensureTurnToolStats(normalizedSessionId);
+  stats.toolCallCount += 1;
+  stats.toolArgsTokens += breakdown.argsTokens;
+  stats.toolResultTokens += breakdown.resultTokens;
+  stats.toolEntries.push(
+    truncateString(
+      `tool=${breakdown.toolName} argsTokens=${breakdown.argsTokens} resultTokens=${breakdown.resultTokens} args=${breakdown.argsPreview} result=${breakdown.resultPreview}`,
+      500,
+    ),
+  );
+
+  if (stats.toolEntries.length > 20) {
+    stats.toolEntries = stats.toolEntries.slice(-20);
+  }
+}
+
+function estimateRequestOverheadTokens({ toolCallCount }) {
+  const normalizedToolCallCount = Math.max(0, Number(toolCallCount) || 0);
+  return DEFAULT_REQUEST_OVERHEAD_TOKENS + (normalizedToolCallCount * PER_TOOL_CALL_OVERHEAD_TOKENS);
+}
+
+function mergeEntries(baseEntries, toolEntries = []) {
+  const normalizedBase = Array.isArray(baseEntries) ? baseEntries : [];
+  const normalizedTools = Array.isArray(toolEntries) ? toolEntries : [];
+  return [...normalizedBase, ...normalizedTools].slice(-80);
+}
+
+function getErrorMessage(error) {
+  return String(error?.message ?? error).trim() || "unknown error";
+}
+
+function getErrorPartialOutput(error) {
+  return String(error?.partialOutput ?? "").trim();
+}
+
+function getErrorSessionId(error) {
+  return String(error?.sessionId ?? "").trim();
 }
 
 function safeCloneToolArgs(toolArgs) {
@@ -238,6 +383,83 @@ async function reportClaudeHookEvent({ config, event, timeoutMs }) {
     headers,
     timeoutMs,
     body: JSON.stringify({ event }),
+  });
+}
+
+async function reportClaudeTokenEstimateEvent({
+  sessionId,
+  prompt,
+  output,
+  config,
+  workDir,
+  entries = [],
+  status = "completed",
+  failureReason = "",
+  attempt = 1,
+  retryPlanned = false,
+  toolCallCount = 0,
+  toolArgsTokens = 0,
+  toolResultTokens = 0,
+  contextCarryoverTokens = 0,
+  requestOverheadTokens = 0,
+}) {
+  const interceptServerUrl = trimTrailingSlash(config.interceptServerUrl);
+  if (!config.interceptEnabled || !interceptServerUrl) {
+    return;
+  }
+
+  const breakdown = estimateConversationTokenBreakdown({ prompt, output, entries });
+  const toolTokens = Math.max(0, Number(toolArgsTokens) || 0) + Math.max(0, Number(toolResultTokens) || 0);
+  const carryoverTokens = Math.max(0, Number(contextCarryoverTokens) || 0);
+  const overheadTokens = Math.max(0, Number(requestOverheadTokens) || 0);
+  const turnTokens = breakdown.totalTokens + toolTokens + overheadTokens;
+  const tokens = turnTokens + carryoverTokens;
+
+  if (tokens <= 0) {
+    return;
+  }
+
+  await reportClaudeHookEvent({
+    config,
+    timeoutMs: toPositiveInt(config.interceptTimeoutMs, 5000),
+    event: {
+      msg: `Session tokens estimated (${status}): ${sessionId || "-"}`,
+      entry: `Session tokens estimated (${status}): ${sessionId || "-"} (${tokens})`,
+      tokens,
+      tokenEstimate: {
+        sessionId,
+        provider: "claude",
+        status,
+        promptTokens: breakdown.promptTokens,
+        outputTokens: breakdown.outputTokens,
+        toolCallCount: Math.max(0, Number(toolCallCount) || 0),
+        toolArgsTokens: Math.max(0, Number(toolArgsTokens) || 0),
+        toolResultTokens: Math.max(0, Number(toolResultTokens) || 0),
+        toolTokens,
+        contextCarryoverTokens: carryoverTokens,
+        requestOverheadTokens: overheadTokens,
+        turnTokens,
+        totalTokens: breakdown.totalTokens,
+        totalEstimatedTokens: tokens,
+        promptPreview: breakdown.promptPreview,
+        outputPreview: breakdown.outputPreview,
+        attempt,
+        retryPlanned,
+        failureReason: truncateString(failureReason, 240),
+        estimatedAtMs: Date.now(),
+      },
+      prompt: {
+        id: sessionId || `claude_tokens_${crypto.randomUUID()}`,
+        tool: "session",
+        hint: `Estimated tokens for Claude session (${status}): ${tokens}`,
+      },
+      session: {
+        id: sessionId,
+        phase: status === "failed" ? "token-estimate-failed" : "token-estimate",
+        ts: Date.now(),
+        workDir,
+      },
+    },
   });
 }
 
@@ -436,6 +658,13 @@ function buildClaudeHooks(config) {
     console.log(`[${sessionId}] Tool: ${toolName || "unknown"}`);
     console.log(`  Args: ${safeStringify(safeArgs)}`);
     console.log(`  Result: ${safeStringify(safeResult)}`);
+
+    recordToolUsageForSession({
+      sessionId,
+      toolName,
+      toolArgs: safeArgs,
+      toolResult: safeResult,
+    });
 
     try {
       await reportClaudeHookEvent({
@@ -697,10 +926,13 @@ async function runClaudeQuery({
     ]);
   } catch (error) {
     const reason = String(error?.message ?? error);
+    const enrichedError = error && typeof error === "object" ? error : new Error(String(error ?? "unknown error"));
+    enrichedError.partialOutput = normalizeTextOutput(streamedOutput);
+    enrichedError.sessionId = sessionId;
     if (reason.toLowerCase().includes("timeout")) {
       throw new Error(`Claude request timeout after ${timeoutMs}ms`);
     }
-    throw error;
+    throw enrichedError;
   }
 
   output = output || normalizeTextOutput(streamedOutput);
@@ -726,15 +958,92 @@ export async function runClaudeWithSession({
   onDelta?: ((delta: string) => void) | undefined;
   onDone?: ((result: { output: string; sessionId: string }) => void) | undefined;
 }): Promise<{ output: string; sessionId: string }> {
-  const result = await runClaudeQuery({
-    prompt,
-    config,
-    resumeSessionId,
-    onDelta,
-  });
+  const attempt = 1;
 
-  onDone?.(result);
-  return result;
+  try {
+    const result = await runClaudeQuery({
+      prompt,
+      config,
+      resumeSessionId,
+      onDelta,
+    });
+
+    const toolStats = consumeTurnToolStats(result.sessionId);
+    const carryoverTokens = getSessionCarryoverTokens(result.sessionId);
+    const requestOverheadTokens = estimateRequestOverheadTokens({
+      toolCallCount: toolStats.toolCallCount,
+    });
+
+    try {
+      await reportClaudeTokenEstimateEvent({
+        sessionId: result.sessionId,
+        prompt,
+        output: result.output,
+        config,
+        workDir: config.workDir || process.cwd(),
+        entries: mergeEntries([prompt, result.output], toolStats.toolEntries),
+        attempt,
+        retryPlanned: false,
+        toolCallCount: toolStats.toolCallCount,
+        toolArgsTokens: toolStats.toolArgsTokens,
+        toolResultTokens: toolStats.toolResultTokens,
+        contextCarryoverTokens: carryoverTokens,
+        requestOverheadTokens,
+      });
+    } catch (error) {
+      console.warn(
+        `[claude-agent-sdk][hook] token estimate upload failed sessionId=${result.sessionId} reason=${String(error?.message ?? error)}`,
+      );
+    }
+
+    const breakdown = estimateConversationTokenBreakdown({
+      prompt,
+      output: result.output,
+      entries: mergeEntries([prompt, result.output], toolStats.toolEntries),
+    });
+    const turnTokenContribution = breakdown.totalTokens
+      + toolStats.toolArgsTokens
+      + toolStats.toolResultTokens
+      + requestOverheadTokens;
+    setSessionCarryoverTokens(result.sessionId, carryoverTokens + turnTokenContribution);
+
+    onDone?.(result);
+    return result;
+  } catch (error) {
+    const failedSessionId = getErrorSessionId(error) || resumeSessionId;
+    const toolStats = consumeTurnToolStats(failedSessionId);
+    const carryoverTokens = getSessionCarryoverTokens(failedSessionId);
+    const requestOverheadTokens = estimateRequestOverheadTokens({
+      toolCallCount: toolStats.toolCallCount,
+    });
+
+    try {
+      await reportClaudeTokenEstimateEvent({
+        sessionId: failedSessionId,
+        prompt,
+        output: getErrorPartialOutput(error),
+        config,
+        workDir: config.workDir || process.cwd(),
+        entries: mergeEntries([prompt, getErrorPartialOutput(error), `error: ${getErrorMessage(error)}`], toolStats.toolEntries),
+        status: "failed",
+        failureReason: getErrorMessage(error),
+        attempt,
+        retryPlanned: false,
+        toolCallCount: toolStats.toolCallCount,
+        toolArgsTokens: toolStats.toolArgsTokens,
+        toolResultTokens: toolStats.toolResultTokens,
+        contextCarryoverTokens: carryoverTokens,
+        requestOverheadTokens,
+      });
+    } catch (reportError) {
+      console.warn(
+        `[claude-agent-sdk][hook] token estimate upload failed sessionId=${failedSessionId || "-"} reason=${String(reportError?.message ?? reportError)}`,
+      );
+    }
+
+    clearSessionTokenTracking(failedSessionId);
+    throw error;
+  }
 }
 
 export async function runClaude({ prompt, config, resumeSessionId = "" }) {
@@ -772,27 +1081,110 @@ export async function runClaudeWithSharedSession({
 
   return withSharedSessionLock(key, async () => {
     const resumeSessionId = sharedClaudeSessionIds.get(key) || "";
-    const result = await runClaudeQuery({
-      prompt,
-      config,
-      resumeSessionId,
-      onDelta,
-    });
+    const attempt = 1;
 
-    sharedClaudeSessionIds.set(key, result.sessionId);
-    onDone?.(result);
-    return result;
+    try {
+      const result = await runClaudeQuery({
+        prompt,
+        config,
+        resumeSessionId,
+        onDelta,
+      });
+
+      const toolStats = consumeTurnToolStats(result.sessionId);
+      const carryoverTokens = getSessionCarryoverTokens(result.sessionId);
+      const requestOverheadTokens = estimateRequestOverheadTokens({
+        toolCallCount: toolStats.toolCallCount,
+      });
+
+      try {
+        await reportClaudeTokenEstimateEvent({
+          sessionId: result.sessionId,
+          prompt,
+          output: result.output,
+          config,
+          workDir: config.workDir || process.cwd(),
+          entries: mergeEntries([prompt, result.output], toolStats.toolEntries),
+          attempt,
+          retryPlanned: false,
+          toolCallCount: toolStats.toolCallCount,
+          toolArgsTokens: toolStats.toolArgsTokens,
+          toolResultTokens: toolStats.toolResultTokens,
+          contextCarryoverTokens: carryoverTokens,
+          requestOverheadTokens,
+        });
+      } catch (error) {
+        console.warn(
+          `[claude-agent-sdk][hook] token estimate upload failed sessionId=${result.sessionId} reason=${String(error?.message ?? error)}`,
+        );
+      }
+
+      const breakdown = estimateConversationTokenBreakdown({
+        prompt,
+        output: result.output,
+        entries: mergeEntries([prompt, result.output], toolStats.toolEntries),
+      });
+      const turnTokenContribution = breakdown.totalTokens
+        + toolStats.toolArgsTokens
+        + toolStats.toolResultTokens
+        + requestOverheadTokens;
+      setSessionCarryoverTokens(result.sessionId, carryoverTokens + turnTokenContribution);
+
+      sharedClaudeSessionIds.set(key, result.sessionId);
+      onDone?.(result);
+      return result;
+    } catch (error) {
+      const failedSessionId = getErrorSessionId(error) || resumeSessionId;
+      const toolStats = consumeTurnToolStats(failedSessionId);
+      const carryoverTokens = getSessionCarryoverTokens(failedSessionId);
+      const requestOverheadTokens = estimateRequestOverheadTokens({
+        toolCallCount: toolStats.toolCallCount,
+      });
+
+      try {
+        await reportClaudeTokenEstimateEvent({
+          sessionId: failedSessionId,
+          prompt,
+          output: getErrorPartialOutput(error),
+          config,
+          workDir: config.workDir || process.cwd(),
+          entries: mergeEntries([prompt, getErrorPartialOutput(error), `error: ${getErrorMessage(error)}`], toolStats.toolEntries),
+          status: "failed",
+          failureReason: getErrorMessage(error),
+          attempt,
+          retryPlanned: false,
+          toolCallCount: toolStats.toolCallCount,
+          toolArgsTokens: toolStats.toolArgsTokens,
+          toolResultTokens: toolStats.toolResultTokens,
+          contextCarryoverTokens: carryoverTokens,
+          requestOverheadTokens,
+        });
+      } catch (reportError) {
+        console.warn(
+          `[claude-agent-sdk][hook] token estimate upload failed sessionId=${failedSessionId || "-"} reason=${String(reportError?.message ?? reportError)}`,
+        );
+      }
+
+      throw error;
+    }
   });
 }
 
 export function resetSharedClaudeSession(sessionKey = "") {
   if (sessionKey) {
     const key = normalizeSessionKey(sessionKey);
+    const sessionId = sharedClaudeSessionIds.get(key) || "";
     sharedClaudeSessionIds.delete(key);
     sharedSessionQueues.delete(key);
+    clearSessionTokenTracking(sessionId);
     return;
   }
 
+  for (const sessionId of sharedClaudeSessionIds.values()) {
+    clearSessionTokenTracking(sessionId);
+  }
   sharedClaudeSessionIds.clear();
   sharedSessionQueues.clear();
+  sessionTurnToolStats.clear();
+  sessionContextCarryoverTokens.clear();
 }
