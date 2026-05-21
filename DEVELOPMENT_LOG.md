@@ -55,6 +55,28 @@
 验证记录：
 - `npm run build`：通过
 
+## 2026-05-21
+
+### 19) 审批页拆分 Token 管理模块 + users 表展示 + Bearer-only 鉴权头
+
+变更目标：
+- 将 auth token 签发能力从审批区中独立出来，形成单独的 token 管理模块。
+- 在页面中直接展示 `users` 表，便于运维与调试。
+- 清理遗留 header 兼容，拦截鉴权仅保留标准 Bearer 路径。
+
+主要改动：
+- `src/sync/http-server.ts`
+  - 新增 `listUsersFromDb`，按更新时间倒序读取 users 数据。
+  - 新增 `GET /auth/users` 接口（支持 `limit`）。
+  - `requireInterceptAuth` 删除 `x-intercept-token` 兜底读取，仅使用 Authorization Bearer。
+- `src/sync/intercept-approval.html`
+  - 新增 `Auth Token Manager` 面板：`userName` + `Issue Token` + `Refresh Users`。
+  - 新增 users 表展示（`userId/userName/authToken/updatedAt`）。
+  - `Intercept Waiting Approval` 面板移除 `userName`，改为支持手动输入 `auth token`。
+
+验证记录：
+- `npm run build`：通过
+
 ### 16) Token 估算模块化 + 缺口补齐（含工具调用 token）
 
 变更目标：

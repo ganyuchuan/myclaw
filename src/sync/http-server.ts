@@ -706,6 +706,24 @@ function getUserByAuthToken(database, authToken) {
   };
 }
 
+function listUsersFromDb(database, limit = 100) {
+  const normalizedLimit = Math.max(1, Math.min(toInt(limit, 100), 500));
+  const rows = database.prepare(`
+    SELECT user_id, user_name, auth_token, created_at_ms, updated_at_ms
+    FROM users
+    ORDER BY updated_at_ms DESC, created_at_ms DESC
+    LIMIT ?
+  `).all(normalizedLimit);
+
+  return rows.map((row) => ({
+    userId: String(row.user_id ?? "").trim(),
+    userName: String(row.user_name ?? "").trim(),
+    authToken: String(row.auth_token ?? "").trim(),
+    createdAtMs: Number.isFinite(row.created_at_ms) ? row.created_at_ms : 0,
+    updatedAtMs: Number.isFinite(row.updated_at_ms) ? row.updated_at_ms : 0,
+  }));
+}
+
 function migrateInterceptStateTableIfNeeded(database) {
   const columns = database.prepare("PRAGMA table_info(intercept_state)").all();
   const hasUserIdPk = columns.some((column) => column?.name === "user_id" && Number(column?.pk) === 1);
@@ -1057,8 +1075,7 @@ function requireInterceptAuth(req, res) {
   const tokenFromAuth = authorization.toLowerCase().startsWith("bearer ")
     ? authorization.slice("bearer ".length).trim()
     : "";
-  const tokenFromHeader = String(req.headers["x-intercept-token"] ?? "").trim();
-  const provided = tokenFromAuth || tokenFromHeader;
+  const provided = tokenFromAuth;
 
   if (provided) {
     const userPrincipal = getUserByAuthToken(storeDb, provided);
@@ -1132,6 +1149,15 @@ const server = createServer(async (req, res) => {
         userId: issued.userId,
         authToken: issued.authToken,
         userName: issued.userName,
+      });
+    }
+
+    if (req.method === "GET" && pathname === "/auth/users") {
+      const limit = toInt(url.searchParams.get("limit"), 100);
+      const users = listUsersFromDb(storeDb, limit);
+      return json(res, 200, {
+        ok: true,
+        items: users,
       });
     }
 

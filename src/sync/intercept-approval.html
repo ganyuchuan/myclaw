@@ -115,16 +115,44 @@
         white-space: pre-wrap;
         word-break: break-word;
       }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+      }
+      th,
+      td {
+        border: 1px solid var(--border);
+        padding: 6px 8px;
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        background: #f7f9fb;
+      }
+      .token-cell {
+        max-width: 320px;
+        word-break: break-all;
+      }
     </style>
   </head>
   <body>
     <div class="wrap">
       <div class="panel">
-        <h1 class="title">Intercept Waiting Approval</h1>
+        <h1 class="title">Auth Token Manager</h1>
         <div class="row">
           <label>User Name <input id="userName" value="admin" placeholder="required" /></label>
           <button id="issueToken" class="primary">Issue Token</button>
-          <label>Auth Token <input id="token" type="text" readonly placeholder="issue token first" /></label>
+          <button id="refreshUsers">Refresh Users</button>
+        </div>
+        <p class="meta" id="tokenStatus">Issue a token to start.</p>
+        <div id="usersTable"></div>
+      </div>
+
+      <div class="panel">
+        <h1 class="title">Intercept Waiting Approval</h1>
+        <div class="row">
+          <label>Auth Token <input id="token" type="text" placeholder="paste or issue token" /></label>
           <label>Decided By <input id="decidedBy" value="web-ui" /></label>
           <button id="refresh" class="primary">Refresh</button>
           <button id="auto">Auto 3s: ON</button>
@@ -154,8 +182,11 @@
       const tokenInput = $("token");
       const userNameInput = $("userName");
       const issueTokenBtn = $("issueToken");
+      const refreshUsersBtn = $("refreshUsers");
       const decidedByInput = $("decidedBy");
       const statusEl = $("status");
+      const tokenStatusEl = $("tokenStatus");
+      const usersTableEl = $("usersTable");
       const listEl = $("list");
       const toolCallsEl = $("toolCalls");
       const summaryEl = $("summary");
@@ -198,9 +229,11 @@
         }
 
         tokenInput.value = token;
-        statusEl.className = "meta";
-        statusEl.textContent =
+        tokenStatusEl.className = "meta";
+        tokenStatusEl.textContent =
           "Token issued for userId=" + (payload.userId || "-") + " at " + new Date().toLocaleTimeString();
+
+        return payload;
       }
 
       function ts(ms) {
@@ -366,6 +399,39 @@
         }
       }
 
+      function renderUsersTable(items) {
+        if (!Array.isArray(items) || items.length === 0) {
+          usersTableEl.innerHTML = '<p class="empty">No users yet.</p>';
+          return;
+        }
+
+        let html =
+          "<table><thead><tr>" +
+          "<th>User ID</th>" +
+          "<th>User Name</th>" +
+          "<th>Auth Token</th>" +
+          "<th>Updated</th>" +
+          "</tr></thead><tbody>";
+
+        for (const item of items) {
+          html +=
+            "<tr>" +
+            "<td>" + (item.userId || "-") + "</td>" +
+            "<td>" + (item.userName || "-") + "</td>" +
+            '<td class="token-cell">' + (item.authToken || "-") + "</td>" +
+            "<td>" + ts(item.updatedAtMs || item.createdAtMs || 0) + "</td>" +
+            "</tr>";
+        }
+
+        html += "</tbody></table>";
+        usersTableEl.innerHTML = html;
+      }
+
+      async function refreshUsers() {
+        const payload = await fetchJson("/auth/users?limit=100");
+        renderUsersTable(payload.items || []);
+      }
+
       async function refresh() {
         statusEl.className = "meta";
         statusEl.textContent = "Refreshing...";
@@ -402,15 +468,30 @@
         issueTokenBtn.disabled = true;
         try {
           await issueAuthToken();
+          await refreshUsers();
           await refresh();
         } catch (error) {
-          statusEl.textContent = String(error.message || error);
-          statusEl.className = "error";
+          tokenStatusEl.textContent = String(error.message || error);
+          tokenStatusEl.className = "error";
         } finally {
           issueTokenBtn.disabled = false;
         }
       });
+      refreshUsersBtn.addEventListener("click", async () => {
+        refreshUsersBtn.disabled = true;
+        try {
+          await refreshUsers();
+          tokenStatusEl.className = "meta";
+          tokenStatusEl.textContent = "Users refreshed at " + new Date().toLocaleTimeString();
+        } catch (error) {
+          tokenStatusEl.textContent = String(error.message || error);
+          tokenStatusEl.className = "error";
+        } finally {
+          refreshUsersBtn.disabled = false;
+        }
+      });
       autoBtn.addEventListener("click", toggleAuto);
+      refreshUsers();
       refresh();
       timer = setInterval(refresh, 3000);
     </script>
