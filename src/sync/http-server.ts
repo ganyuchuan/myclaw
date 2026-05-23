@@ -1,10 +1,9 @@
 import crypto from "node:crypto";
 import { createServer } from "node:http";
-import { DatabaseSync } from "node:sqlite";
 import dotenv from "dotenv";
 import fs from "node:fs";
 import os from "node:os";
-import path from "node:path";
+import { interceptStore } from "./intercept-store.js";
 
 dotenv.config();
 
@@ -52,7 +51,6 @@ function dayKey(ts = Date.now()) {
 }
 
 const port = toInt(process.env.SYNC_PORT, 18790);
-const dbFile = process.env.SYNC_DB_FILE?.trim() || "data/sync.db";
 const interceptDefaultDecision = normalizeDecision(process.env.SYNC_INTERCEPT_DEFAULT_DECISION, "allow");
 const interceptManualQueueEnabled = toBool(process.env.SYNC_INTERCEPT_MANUAL_QUEUE_ENABLED, false);
 const interceptManualQueueTools = new Set(toList(process.env.SYNC_INTERCEPT_MANUAL_QUEUE_TOOLS, []));
@@ -61,7 +59,6 @@ const interceptAutoDenyTools = new Set(toList(process.env.SYNC_INTERCEPT_AUTO_DE
 const interceptWaitTimeoutMs = toInt(process.env.SYNC_INTERCEPT_WAIT_TIMEOUT_MS, 60000);
 const interceptPollAfterMs = toInt(process.env.SYNC_INTERCEPT_POLL_AFTER_MS, 1000);
 const maxStateEntries = 50;
-const maxToolCalls = 100;
 
 function setToArray(setLike) {
   return Array.isArray(setLike) ? setLike : [...setLike];
@@ -110,86 +107,6 @@ function getLanIPv4Addresses() {
   }
 
   return [...ips];
-}
-
-function makeDefaultInterceptState() {
-  return {
-    total: 0,
-    running: 0,
-    waiting: 0,
-    completed: false,
-    tokens: 0,
-    tokens_today: 0,
-    msg: "",
-    entries: [],
-    prompt: null,
-    last_token_estimate: null,
-    tokens_day: dayKey(),
-    last_completed_at_ms: 0,
-  };
-}
-
-function parseJsonText(raw, fallback) {
-  const text = String(raw ?? "").trim();
-  if (!text) {
-    return fallback;
-  }
-
-  try {
-    return JSON.parse(text);
-  } catch {
-    return fallback;
-  }
-}
-
-function stringifyJson(value, fallback = "null") {
-  try {
-    return JSON.stringify(value ?? null);
-  } catch {
-    return fallback;
-  }
-}
-
-function ensureInterceptState(raw) {
-  const fallback = makeDefaultInterceptState();
-  if (!raw || typeof raw !== "object") {
-    return fallback;
-  }
-
-  return {
-    total: Number.isFinite(raw.total) ? raw.total : fallback.total,
-    running: Number.isFinite(raw.running) ? raw.running : fallback.running,
-    waiting: Number.isFinite(raw.waiting) ? raw.waiting : fallback.waiting,
-    completed: Boolean(raw.completed),
-    tokens: Number.isFinite(raw.tokens) ? raw.tokens : fallback.tokens,
-    tokens_today: Number.isFinite(raw.tokens_today) ? raw.tokens_today : fallback.tokens_today,
-    msg: String(raw.msg ?? fallback.msg),
-    entries: Array.isArray(raw.entries) ? raw.entries.slice(-50).map((item) => String(item ?? "")).filter(Boolean) : [],
-    prompt: raw.prompt && typeof raw.prompt === "object"
-      ? {
-          id: String(raw.prompt.id ?? "").trim(),
-          tool: String(raw.prompt.tool ?? "").trim(),
-          hint: String(raw.prompt.hint ?? "").trim(),
-        }
-      : null,
-    last_token_estimate: raw.last_token_estimate && typeof raw.last_token_estimate === "object"
-      ? {
-          sessionId: String(raw.last_token_estimate.sessionId ?? "").trim(),
-          promptTokens: Number.isFinite(raw.last_token_estimate.promptTokens) ? raw.last_token_estimate.promptTokens : 0,
-          outputTokens: Number.isFinite(raw.last_token_estimate.outputTokens) ? raw.last_token_estimate.outputTokens : 0,
-          totalTokens: Number.isFinite(raw.last_token_estimate.totalTokens) ? raw.last_token_estimate.totalTokens : 0,
-          promptPreview: String(raw.last_token_estimate.promptPreview ?? ""),
-          outputPreview: String(raw.last_token_estimate.outputPreview ?? ""),
-          estimatedAtMs: Number.isFinite(raw.last_token_estimate.estimatedAtMs)
-            ? raw.last_token_estimate.estimatedAtMs
-            : 0,
-        }
-      : null,
-    tokens_day: String(raw.tokens_day ?? fallback.tokens_day),
-    last_completed_at_ms: Number.isFinite(raw.last_completed_at_ms)
-      ? raw.last_completed_at_ms
-      : fallback.last_completed_at_ms,
-  };
 }
 
 type InterceptPretoolRequest = {
@@ -257,657 +174,6 @@ type Principal = {
 type AuthTokenBody = {
   userName?: string;
 };
-
-function generateIssuedAuthToken() {
-  // 128-bit random token encoded as hex.
-  return crypto.randomBytes(16).toString("hex");
-}
-
-function generateUserId() {
-  return `user_${crypto.randomUUID()}`;
-}
-
-function normalizeRequestRecord(raw) {
-  if (!raw || typeof raw !== "object") {
-    return null;
-  }
-
-  return {
-    id: String(raw.id ?? "").trim(),
-    tool: String(raw.tool ?? "").trim(),
-    hint: String(raw.hint ?? "").trim(),
-    msg: String(raw.msg ?? "").trim(),
-    input: raw.input && typeof raw.input === "object" ? raw.input : null,
-    sessionId: String(raw.sessionId ?? "").trim(),
-    workDir: String(raw.workDir ?? "").trim(),
-    status: String(raw.status ?? "waiting").trim(),
-    decision: normalizeDecision(raw.decision, "wait"),
-    reason: String(raw.reason ?? "").trim(),
-    createdAtMs: Number.isFinite(raw.createdAtMs) ? raw.createdAtMs : 0,
-    updatedAtMs: Number.isFinite(raw.updatedAtMs) ? raw.updatedAtMs : 0,
-    expiresAtMs: Number.isFinite(raw.expiresAtMs) ? raw.expiresAtMs : 0,
-    decidedBy: String(raw.decidedBy ?? "").trim(),
-    decidedAtMs: Number.isFinite(raw.decidedAtMs) ? raw.decidedAtMs : 0,
-  };
-}
-
-function normalizeToolCallRecord(raw) {
-  if (!raw || typeof raw !== "object") {
-    return null;
-  }
-
-  return {
-    id: String(raw.id ?? "").trim(),
-    userId: String(raw.userId ?? "").trim(),
-    sessionId: String(raw.sessionId ?? "").trim(),
-    tool: String(raw.tool ?? "").trim(),
-    args: raw.args && typeof raw.args === "object" ? raw.args : null,
-    result: raw.result && typeof raw.result === "object" ? raw.result : raw.result ?? null,
-    ts: Number.isFinite(raw.ts) ? raw.ts : Date.now(),
-    workDir: String(raw.workDir ?? "").trim(),
-  };
-}
-
-function loadStateFromDb(database, userId) {
-  const row = database.prepare(`
-    SELECT
-      total,
-      running,
-      waiting,
-      completed,
-      tokens,
-      tokens_today,
-      msg,
-      entries_json,
-      prompt_json,
-      last_token_estimate_json,
-      tokens_day,
-      last_completed_at_ms
-    FROM intercept_state
-    WHERE user_id = ?
-  `).get(userId);
-
-  if (!row) {
-    return makeDefaultInterceptState();
-  }
-
-  return ensureInterceptState({
-    total: row.total,
-    running: row.running,
-    waiting: row.waiting,
-    completed: Boolean(row.completed),
-    tokens: row.tokens,
-    tokens_today: row.tokens_today,
-    msg: row.msg,
-    entries: parseJsonText(row.entries_json, []),
-    prompt: parseJsonText(row.prompt_json, null),
-    last_token_estimate: parseJsonText(row.last_token_estimate_json, null),
-    tokens_day: row.tokens_day,
-    last_completed_at_ms: row.last_completed_at_ms,
-  });
-}
-
-function saveStateToDb(database, userId, state) {
-  const normalized = ensureInterceptState(state);
-  database.prepare(`
-    INSERT INTO intercept_state (
-      user_id,
-      total,
-      running,
-      waiting,
-      completed,
-      tokens,
-      tokens_today,
-      msg,
-      entries_json,
-      prompt_json,
-      last_token_estimate_json,
-      tokens_day,
-      last_completed_at_ms
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(user_id) DO UPDATE SET
-      total = excluded.total,
-      running = excluded.running,
-      waiting = excluded.waiting,
-      completed = excluded.completed,
-      tokens = excluded.tokens,
-      tokens_today = excluded.tokens_today,
-      msg = excluded.msg,
-      entries_json = excluded.entries_json,
-      prompt_json = excluded.prompt_json,
-      last_token_estimate_json = excluded.last_token_estimate_json,
-      tokens_day = excluded.tokens_day,
-      last_completed_at_ms = excluded.last_completed_at_ms
-  `).run(
-    userId,
-    normalized.total,
-    normalized.running,
-    normalized.waiting,
-    normalized.completed ? 1 : 0,
-    normalized.tokens,
-    normalized.tokens_today,
-    normalized.msg,
-    stringifyJson(normalized.entries, "[]"),
-    stringifyJson(normalized.prompt, "null"),
-    stringifyJson(normalized.last_token_estimate, "null"),
-    normalized.tokens_day,
-    normalized.last_completed_at_ms,
-  );
-}
-
-function getRequestById(database, userId, id) {
-  const row = database.prepare(`
-    SELECT
-      id,
-      tool,
-      hint,
-      msg,
-      input_json,
-      session_id,
-      work_dir,
-      status,
-      decision,
-      reason,
-      created_at_ms,
-      updated_at_ms,
-      expires_at_ms,
-      decided_by,
-      decided_at_ms
-    FROM intercept_requests
-    WHERE user_id = ? AND id = ?
-  `).get(userId, id);
-
-  if (!row) {
-    return null;
-  }
-
-  return normalizeRequestRecord({
-    id: row.id,
-    tool: row.tool,
-    hint: row.hint,
-    msg: row.msg,
-    input: parseJsonText(row.input_json, null),
-    sessionId: row.session_id,
-    workDir: row.work_dir,
-    status: row.status,
-    decision: row.decision,
-    reason: row.reason,
-    createdAtMs: row.created_at_ms,
-    updatedAtMs: row.updated_at_ms,
-    expiresAtMs: row.expires_at_ms,
-    decidedBy: row.decided_by,
-    decidedAtMs: row.decided_at_ms,
-  });
-}
-
-function listRequestsFromDb(database, userId, { status = "", limit = 100 } = {}) {
-  const normalizedLimit = Math.max(1, toInt(limit, 100));
-  const rows = status
-    ? database.prepare(`
-        SELECT
-          id,
-          tool,
-          hint,
-          msg,
-          input_json,
-          session_id,
-          work_dir,
-          status,
-          decision,
-          reason,
-          created_at_ms,
-          updated_at_ms,
-          expires_at_ms,
-          decided_by,
-          decided_at_ms
-        FROM intercept_requests
-        WHERE user_id = ? AND status = ?
-        ORDER BY created_at_ms DESC
-        LIMIT ?
-      `).all(userId, status, normalizedLimit)
-    : database.prepare(`
-        SELECT
-          id,
-          tool,
-          hint,
-          msg,
-          input_json,
-          session_id,
-          work_dir,
-          status,
-          decision,
-          reason,
-          created_at_ms,
-          updated_at_ms,
-          expires_at_ms,
-          decided_by,
-          decided_at_ms
-        FROM intercept_requests
-        WHERE user_id = ?
-        ORDER BY created_at_ms DESC
-        LIMIT ?
-      `).all(userId, normalizedLimit);
-
-  return rows.map((row) => normalizeRequestRecord({
-    id: row.id,
-    tool: row.tool,
-    hint: row.hint,
-    msg: row.msg,
-    input: parseJsonText(row.input_json, null),
-    sessionId: row.session_id,
-    workDir: row.work_dir,
-    status: row.status,
-    decision: row.decision,
-    reason: row.reason,
-    createdAtMs: row.created_at_ms,
-    updatedAtMs: row.updated_at_ms,
-    expiresAtMs: row.expires_at_ms,
-    decidedBy: row.decided_by,
-    decidedAtMs: row.decided_at_ms,
-  }));
-}
-
-function saveRequestToDb(database, userId, request) {
-  const normalized = normalizeRequestRecord(request);
-  if (!normalized?.id) {
-    return;
-  }
-
-  database.prepare(`
-    INSERT INTO intercept_requests (
-      id,
-      user_id,
-      tool,
-      hint,
-      msg,
-      input_json,
-      session_id,
-      work_dir,
-      status,
-      decision,
-      reason,
-      created_at_ms,
-      updated_at_ms,
-      expires_at_ms,
-      decided_by,
-      decided_at_ms
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET
-      tool = excluded.tool,
-      user_id = excluded.user_id,
-      hint = excluded.hint,
-      msg = excluded.msg,
-      input_json = excluded.input_json,
-      session_id = excluded.session_id,
-      work_dir = excluded.work_dir,
-      status = excluded.status,
-      decision = excluded.decision,
-      reason = excluded.reason,
-      created_at_ms = excluded.created_at_ms,
-      updated_at_ms = excluded.updated_at_ms,
-      expires_at_ms = excluded.expires_at_ms,
-      decided_by = excluded.decided_by,
-      decided_at_ms = excluded.decided_at_ms
-  `).run(
-    normalized.id,
-    userId,
-    normalized.tool,
-    normalized.hint,
-    normalized.msg,
-    stringifyJson(normalized.input, "null"),
-    normalized.sessionId,
-    normalized.workDir,
-    normalized.status,
-    normalized.decision,
-    normalized.reason,
-    normalized.createdAtMs,
-    normalized.updatedAtMs,
-    normalized.expiresAtMs,
-    normalized.decidedBy,
-    normalized.decidedAtMs,
-  );
-}
-
-function listToolCallsFromDb(database, userId, limit = maxToolCalls) {
-  const normalizedLimit = Math.max(1, Math.min(toInt(limit, maxToolCalls), 500));
-  const rows = database.prepare(`
-    SELECT id, user_id, session_id, tool, args_json, result_json, ts, work_dir
-    FROM intercept_tool_calls
-    WHERE user_id = ?
-    ORDER BY ts DESC, id DESC
-    LIMIT ?
-  `).all(userId, normalizedLimit);
-
-  return rows
-    .map((row) => normalizeToolCallRecord({
-      id: row.id,
-      userId: row.user_id,
-      sessionId: row.session_id,
-      tool: row.tool,
-      args: parseJsonText(row.args_json, null),
-      result: parseJsonText(row.result_json, null),
-      ts: row.ts,
-      workDir: row.work_dir,
-    }))
-    .filter(Boolean);
-}
-
-function countToolCallsFromDb(database, userId) {
-  const row = database.prepare("SELECT COUNT(*) AS total FROM intercept_tool_calls WHERE user_id = ?").get(userId);
-  return Number.isFinite(row?.total) ? row.total : 0;
-}
-
-function insertToolCallToDb(database, userId, toolCall) {
-  const normalized = normalizeToolCallRecord(toolCall);
-  if (!normalized?.id) {
-    return;
-  }
-
-  database.prepare(`
-    INSERT INTO intercept_tool_calls (id, user_id, session_id, tool, args_json, result_json, ts, work_dir)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET
-      user_id = excluded.user_id,
-      session_id = excluded.session_id,
-      tool = excluded.tool,
-      args_json = excluded.args_json,
-      result_json = excluded.result_json,
-      ts = excluded.ts,
-      work_dir = excluded.work_dir
-  `).run(
-    normalized.id,
-    userId,
-    normalized.sessionId,
-    normalized.tool,
-    stringifyJson(normalized.args, "null"),
-    stringifyJson(normalized.result, "null"),
-    normalized.ts,
-    normalized.workDir,
-  );
-
-  database.prepare(`
-    DELETE FROM intercept_tool_calls
-    WHERE user_id = ? AND id NOT IN (
-      SELECT id
-      FROM intercept_tool_calls
-      WHERE user_id = ?
-      ORDER BY ts DESC, id DESC
-      LIMIT ?
-    )
-  `).run(userId, userId, maxToolCalls);
-}
-
-function countRequestsFromDb(database, userId) {
-  const row = database.prepare("SELECT COUNT(*) AS total FROM intercept_requests WHERE user_id = ?").get(userId);
-  return Number.isFinite(row?.total) ? row.total : 0;
-}
-
-function countAllRequestsFromDb(database) {
-  const row = database.prepare("SELECT COUNT(*) AS total FROM intercept_requests").get();
-  return Number.isFinite(row?.total) ? row.total : 0;
-}
-
-function tryExecMigration(database, sql) {
-  try {
-    database.exec(sql);
-  } catch (error) {
-    const message = String(error?.message ?? error).toLowerCase();
-    if (!message.includes("duplicate column name") && !message.includes("already exists")) {
-      throw error;
-    }
-  }
-}
-
-function createUserTokenRecord(database, { userName, now = Date.now() }) {
-  const normalizedUserName = String(userName ?? "").trim();
-
-  for (let i = 0; i < 6; i += 1) {
-    const userId = generateUserId();
-    const authToken = generateIssuedAuthToken();
-    try {
-      database.prepare(`
-        INSERT INTO users (user_id, user_name, auth_token, created_at_ms, updated_at_ms)
-        VALUES (?, ?, ?, ?, ?)
-      `).run(userId, normalizedUserName, authToken, now, now);
-
-      return {
-        userId,
-        authToken,
-        userName: normalizedUserName,
-      };
-    } catch (error) {
-      const message = String(error?.message ?? error).toLowerCase();
-      if (!message.includes("constraint")) {
-        throw error;
-      }
-    }
-  }
-
-  throw new Error("failed to issue auth token");
-}
-
-function getUserByAuthToken(database, authToken) {
-  const row = database.prepare(`
-    SELECT user_id, user_name, auth_token
-    FROM users
-    WHERE auth_token = ?
-    LIMIT 1
-  `).get(authToken);
-
-  if (!row) {
-    return null;
-  }
-
-  return {
-    userId: String(row.user_id ?? "").trim(),
-    userName: String(row.user_name ?? "").trim(),
-    authToken: String(row.auth_token ?? "").trim(),
-    source: "user",
-  };
-}
-
-function listUsersFromDb(database, limit = 100) {
-  const normalizedLimit = Math.max(1, Math.min(toInt(limit, 100), 500));
-  const rows = database.prepare(`
-    SELECT user_id, user_name, auth_token, created_at_ms, updated_at_ms
-    FROM users
-    ORDER BY updated_at_ms DESC, created_at_ms DESC
-    LIMIT ?
-  `).all(normalizedLimit);
-
-  return rows.map((row) => ({
-    userId: String(row.user_id ?? "").trim(),
-    userName: String(row.user_name ?? "").trim(),
-    authToken: String(row.auth_token ?? "").trim(),
-    createdAtMs: Number.isFinite(row.created_at_ms) ? row.created_at_ms : 0,
-    updatedAtMs: Number.isFinite(row.updated_at_ms) ? row.updated_at_ms : 0,
-  }));
-}
-
-function migrateInterceptStateTableIfNeeded(database) {
-  const columns = database.prepare("PRAGMA table_info(intercept_state)").all();
-  const hasUserIdPk = columns.some((column) => column?.name === "user_id" && Number(column?.pk) === 1);
-  if (hasUserIdPk) {
-    return;
-  }
-
-  const hasIdPk = columns.some((column) => column?.name === "id" && Number(column?.pk) === 1);
-  if (!hasIdPk) {
-    return;
-  }
-
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS intercept_state_v2 (
-      user_id TEXT PRIMARY KEY,
-      total INTEGER NOT NULL DEFAULT 0,
-      running INTEGER NOT NULL DEFAULT 0,
-      waiting INTEGER NOT NULL DEFAULT 0,
-      completed INTEGER NOT NULL DEFAULT 0,
-      tokens INTEGER NOT NULL DEFAULT 0,
-      tokens_today INTEGER NOT NULL DEFAULT 0,
-      msg TEXT NOT NULL DEFAULT '',
-      entries_json TEXT NOT NULL DEFAULT '[]',
-      prompt_json TEXT,
-      last_token_estimate_json TEXT,
-      tokens_day TEXT NOT NULL,
-      last_completed_at_ms INTEGER NOT NULL DEFAULT 0
-    );
-
-    INSERT OR IGNORE INTO intercept_state_v2 (
-      user_id,
-      total,
-      running,
-      waiting,
-      completed,
-      tokens,
-      tokens_today,
-      msg,
-      entries_json,
-      prompt_json,
-      last_token_estimate_json,
-      tokens_day,
-      last_completed_at_ms
-    )
-    SELECT
-      '' AS user_id,
-      total,
-      running,
-      waiting,
-      completed,
-      tokens,
-      tokens_today,
-      msg,
-      entries_json,
-      prompt_json,
-      last_token_estimate_json,
-      tokens_day,
-      last_completed_at_ms
-    FROM intercept_state;
-
-    DROP TABLE intercept_state;
-    ALTER TABLE intercept_state_v2 RENAME TO intercept_state;
-  `);
-}
-
-function openDatabase() {
-  const dir = path.dirname(dbFile);
-  fs.mkdirSync(dir, { recursive: true });
-  const database = new DatabaseSync(dbFile);
-
-  database.exec(`
-    PRAGMA journal_mode = WAL;
-    PRAGMA synchronous = NORMAL;
-    PRAGMA busy_timeout = 5000;
-
-    CREATE TABLE IF NOT EXISTS users (
-      user_id TEXT PRIMARY KEY,
-      user_name TEXT NOT NULL,
-      auth_type TEXT NOT NULL DEFAULT '',
-      auth_token TEXT NOT NULL UNIQUE,
-      created_at_ms INTEGER NOT NULL DEFAULT 0,
-      updated_at_ms INTEGER NOT NULL DEFAULT 0
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_users_auth_token
-      ON users(auth_token);
-
-    CREATE TABLE IF NOT EXISTS intercept_state (
-      user_id TEXT PRIMARY KEY,
-      total INTEGER NOT NULL DEFAULT 0,
-      running INTEGER NOT NULL DEFAULT 0,
-      waiting INTEGER NOT NULL DEFAULT 0,
-      completed INTEGER NOT NULL DEFAULT 0,
-      tokens INTEGER NOT NULL DEFAULT 0,
-      tokens_today INTEGER NOT NULL DEFAULT 0,
-      msg TEXT NOT NULL DEFAULT '',
-      entries_json TEXT NOT NULL DEFAULT '[]',
-      prompt_json TEXT,
-      last_token_estimate_json TEXT,
-      tokens_day TEXT NOT NULL,
-      last_completed_at_ms INTEGER NOT NULL DEFAULT 0
-    );
-
-    CREATE TABLE IF NOT EXISTS intercept_requests (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL DEFAULT '',
-      tool TEXT NOT NULL,
-      hint TEXT NOT NULL DEFAULT '',
-      msg TEXT NOT NULL DEFAULT '',
-      input_json TEXT,
-      session_id TEXT NOT NULL DEFAULT '',
-      work_dir TEXT NOT NULL DEFAULT '',
-      status TEXT NOT NULL,
-      decision TEXT NOT NULL,
-      reason TEXT NOT NULL DEFAULT '',
-      created_at_ms INTEGER NOT NULL DEFAULT 0,
-      updated_at_ms INTEGER NOT NULL DEFAULT 0,
-      expires_at_ms INTEGER NOT NULL DEFAULT 0,
-      decided_by TEXT NOT NULL DEFAULT '',
-      decided_at_ms INTEGER NOT NULL DEFAULT 0
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_intercept_requests_status_created_at
-      ON intercept_requests(status, created_at_ms DESC);
-
-    CREATE INDEX IF NOT EXISTS idx_intercept_requests_user_status_created_at
-      ON intercept_requests(user_id, status, created_at_ms DESC);
-
-    CREATE INDEX IF NOT EXISTS idx_intercept_requests_user_created_at
-      ON intercept_requests(user_id, created_at_ms DESC);
-
-    CREATE TABLE IF NOT EXISTS intercept_tool_calls (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL DEFAULT '',
-      session_id TEXT NOT NULL DEFAULT '',
-      tool TEXT NOT NULL DEFAULT '',
-      args_json TEXT,
-      result_json TEXT,
-      ts INTEGER NOT NULL DEFAULT 0,
-      work_dir TEXT NOT NULL DEFAULT ''
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_intercept_tool_calls_ts
-      ON intercept_tool_calls(ts DESC, id DESC);
-
-    CREATE INDEX IF NOT EXISTS idx_intercept_tool_calls_user_ts
-      ON intercept_tool_calls(user_id, ts DESC, id DESC);
-  `);
-
-  migrateInterceptStateTableIfNeeded(database);
-
-  tryExecMigration(database, "ALTER TABLE intercept_state ADD COLUMN user_id TEXT NOT NULL DEFAULT ''; ");
-  tryExecMigration(database, "ALTER TABLE intercept_requests ADD COLUMN user_id TEXT NOT NULL DEFAULT ''; ");
-  tryExecMigration(database, "ALTER TABLE intercept_tool_calls ADD COLUMN user_id TEXT NOT NULL DEFAULT ''; ");
-
-  database.exec(`
-    CREATE INDEX IF NOT EXISTS idx_intercept_requests_user_status_created_at
-      ON intercept_requests(user_id, status, created_at_ms DESC);
-    CREATE INDEX IF NOT EXISTS idx_intercept_requests_user_created_at
-      ON intercept_requests(user_id, created_at_ms DESC);
-    CREATE INDEX IF NOT EXISTS idx_intercept_tool_calls_user_ts
-      ON intercept_tool_calls(user_id, ts DESC, id DESC);
-  `);
-
-  return database;
-}
-
-const storeDb = openDatabase();
-
-function withTransaction(action) {
-  storeDb.exec("BEGIN IMMEDIATE");
-  try {
-    const result = action();
-    storeDb.exec("COMMIT");
-    return result;
-  } catch (error) {
-    try {
-      storeDb.exec("ROLLBACK");
-    } catch {
-      // Ignore rollback failures after the primary error.
-    }
-    throw error;
-  }
-}
 
 function json(res, status, body) {
   res.writeHead(status, { "Content-Type": "application/json" });
@@ -1078,7 +344,7 @@ function requireInterceptAuth(req, res) {
   const provided = tokenFromAuth;
 
   if (provided) {
-    const userPrincipal = getUserByAuthToken(storeDb, provided);
+    const userPrincipal = interceptStore.getUserByAuthToken(provided);
     if (userPrincipal?.userId) {
       return {
         userId: userPrincipal.userId,
@@ -1132,7 +398,7 @@ const server = createServer(async (req, res) => {
       return json(res, 200, {
         ok: true,
         service: "myclaw-sync-server",
-        intercepts: countAllRequestsFromDb(storeDb),
+        intercepts: interceptStore.countAllRequests(),
       });
     }
 
@@ -1143,7 +409,7 @@ const server = createServer(async (req, res) => {
         return json(res, 400, { error: "userName is required" });
       }
 
-      const issued = withTransaction(() => createUserTokenRecord(storeDb, { userName }));
+      const issued = interceptStore.withTransaction(() => interceptStore.createUserTokenRecord({ userName }));
       return json(res, 200, {
         ok: true,
         userId: issued.userId,
@@ -1154,7 +420,7 @@ const server = createServer(async (req, res) => {
 
     if (req.method === "GET" && pathname === "/auth/users") {
       const limit = toInt(url.searchParams.get("limit"), 100);
-      const users = listUsersFromDb(storeDb, limit);
+      const users = interceptStore.listUsers(limit);
       return json(res, 200, {
         ok: true,
         items: users,
@@ -1170,11 +436,11 @@ const server = createServer(async (req, res) => {
       const principalUserId = principal.userId;
 
       if (req.method === "GET" && pathname === "/api/copilot/intercepts/state") {
-        const state = withTransaction(() => {
-          const nextState = loadStateFromDb(storeDb, principalUserId);
+        const state = interceptStore.withTransaction(() => {
+          const nextState = interceptStore.loadState(principalUserId);
           refreshTodayTokens(nextState);
           updateStateCounters(nextState);
-          saveStateToDb(storeDb, principalUserId, nextState);
+          interceptStore.saveState(principalUserId, nextState);
           return nextState;
         });
 
@@ -1186,23 +452,23 @@ const server = createServer(async (req, res) => {
       if (req.method === "GET" && pathname === "/api/copilot/intercepts/queue") {
         const statusFilter = String(url.searchParams.get("status") ?? "").trim().toLowerCase();
         const limit = toInt(url.searchParams.get("limit"), 100);
-        const items = withTransaction(() => {
-          const state = loadStateFromDb(storeDb, principalUserId);
-          const waitingItems = listRequestsFromDb(storeDb, principalUserId, { status: "waiting", limit: 1000000 });
+        const items = interceptStore.withTransaction(() => {
+          const state = interceptStore.loadState(principalUserId);
+          const waitingItems = interceptStore.listRequests(principalUserId, { status: "waiting", limit: 1000000 });
 
           for (const item of waitingItems) {
             const previousStatus = item.status;
             const previousUpdatedAtMs = item.updatedAtMs;
             maybeExpireRequest(state, item);
             if (item.status !== previousStatus || item.updatedAtMs !== previousUpdatedAtMs) {
-              saveRequestToDb(storeDb, principalUserId, item);
+              interceptStore.saveRequest(principalUserId, item);
             }
           }
 
           updateStateCounters(state);
-          saveStateToDb(storeDb, principalUserId, state);
+          interceptStore.saveState(principalUserId, state);
 
-          return listRequestsFromDb(storeDb, principalUserId, {
+          return interceptStore.listRequests(principalUserId, {
             status: statusFilter,
             limit,
           }).map(toQueueItem);
@@ -1214,7 +480,7 @@ const server = createServer(async (req, res) => {
       if (req.method === "GET" && pathname === "/api/copilot/intercepts/tool-calls") {
         const requested = toInt(url.searchParams.get("limit"), 100);
         const limit = Math.min(requested, 500);
-        const items = listToolCallsFromDb(storeDb, principalUserId, limit).map((item) => ({
+        const items = interceptStore.listToolCalls(principalUserId, limit).map((item) => ({
           id: item.id,
           sessionId: item.sessionId,
           tool: item.tool,
@@ -1226,7 +492,7 @@ const server = createServer(async (req, res) => {
 
         return json(res, 200, {
           items,
-          total: countToolCallsFromDb(storeDb, principalUserId),
+          total: interceptStore.countToolCalls(principalUserId),
           limit,
         });
       }
@@ -1247,11 +513,11 @@ const server = createServer(async (req, res) => {
 
         console.log(`[sync-server][intercept] pretool received id=${id} tool=${tool}`);
 
-        const result = withTransaction(() => {
-          const state = loadStateFromDb(storeDb, principalUserId);
+        const result = interceptStore.withTransaction(() => {
+          const state = interceptStore.loadState(principalUserId);
           refreshTodayTokens(state);
 
-          let item = getRequestById(storeDb, principalUserId, id);
+          let item = interceptStore.getRequestById(principalUserId, id);
           if (item) {
             maybeExpireRequest(state, item);
           }
@@ -1320,8 +586,8 @@ const server = createServer(async (req, res) => {
           }
 
           updateStateCounters(state);
-          saveRequestToDb(storeDb, principalUserId, item);
-          saveStateToDb(storeDb, principalUserId, state);
+          interceptStore.saveRequest(principalUserId, item);
+          interceptStore.saveState(principalUserId, state);
 
           return {
             item,
@@ -1348,9 +614,9 @@ const server = createServer(async (req, res) => {
           return json(res, 400, { error: "id is required" });
         }
 
-        const item = withTransaction(() => {
-          const state = loadStateFromDb(storeDb, principalUserId);
-          const nextItem = getRequestById(storeDb, principalUserId, id);
+        const item = interceptStore.withTransaction(() => {
+          const state = interceptStore.loadState(principalUserId);
+          const nextItem = interceptStore.getRequestById(principalUserId, id);
           if (!nextItem) {
             return null;
           }
@@ -1359,8 +625,8 @@ const server = createServer(async (req, res) => {
           const previousUpdatedAtMs = nextItem.updatedAtMs;
           maybeExpireRequest(state, nextItem);
           if (nextItem.status !== previousStatus || nextItem.updatedAtMs !== previousUpdatedAtMs) {
-            saveRequestToDb(storeDb, principalUserId, nextItem);
-            saveStateToDb(storeDb, principalUserId, state);
+            interceptStore.saveRequest(principalUserId, nextItem);
+            interceptStore.saveState(principalUserId, state);
           }
           return nextItem;
         });
@@ -1393,9 +659,9 @@ const server = createServer(async (req, res) => {
           return json(res, 400, { error: "decision must be allow or deny" });
         }
 
-        const result = withTransaction(() => {
-          const state = loadStateFromDb(storeDb, principalUserId);
-          const item = getRequestById(storeDb, principalUserId, id);
+        const result = interceptStore.withTransaction(() => {
+          const state = interceptStore.loadState(principalUserId);
+          const item = interceptStore.getRequestById(principalUserId, id);
           if (!item) {
             return null;
           }
@@ -1424,8 +690,8 @@ const server = createServer(async (req, res) => {
           appendEntry(state, `Manual ${finalDecision}: ${item.tool} (${item.id})`);
 
           updateStateCounters(state);
-          saveRequestToDb(storeDb, principalUserId, item);
-          saveStateToDb(storeDb, principalUserId, state);
+          interceptStore.saveRequest(principalUserId, item);
+          interceptStore.saveState(principalUserId, state);
 
           return { item, state };
         });
@@ -1451,8 +717,8 @@ const server = createServer(async (req, res) => {
           return json(res, 400, { error: "invalid event payload" });
         }
 
-        const state = withTransaction(() => {
-          const nextState = loadStateFromDb(storeDb, principalUserId);
+        const state = interceptStore.withTransaction(() => {
+          const nextState = interceptStore.loadState(principalUserId);
           refreshTodayTokens(nextState);
 
           const msg = String(event.msg ?? "").trim();
@@ -1499,7 +765,7 @@ const server = createServer(async (req, res) => {
           }
 
           if (event.toolCall && typeof event.toolCall === "object") {
-            insertToolCallToDb(storeDb, principalUserId, event.toolCall);
+            interceptStore.insertToolCall(principalUserId, event.toolCall);
           }
 
           const tokens = Number.parseInt(String(event.tokens ?? "0"), 10);
@@ -1526,7 +792,7 @@ const server = createServer(async (req, res) => {
           }
 
           updateStateCounters(nextState);
-          saveStateToDb(storeDb, principalUserId, nextState);
+          interceptStore.saveState(principalUserId, nextState);
           return nextState;
         });
 
@@ -1551,5 +817,5 @@ server.listen(port, "0.0.0.0", () => {
   for (const ip of lanIps) {
     console.log(`[sync-server] LAN access: http://${ip}:${port}`);
   }
-  console.log(`[sync-server] db file: ${dbFile}`);
+  console.log(`[sync-server] db file: ${interceptStore.getDbFile()}`);
 });

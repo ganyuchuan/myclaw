@@ -2,6 +2,28 @@
 
 ## 2026-05-19
 
+## 2026-05-23
+
+### 20) http-server 数据逻辑抽离到单例 store
+
+变更目标：
+- 将 `http-server` 中全部数据层职责（SQLite 初始化/迁移/事务/CRUD）从路由逻辑中剥离。
+- 通过单例 store 集中管理数据访问，降低文件复杂度并提升可维护性。
+
+主要改动：
+- `src/sync/intercept-store.ts`
+  - 新增 `interceptStore` 单例，统一封装数据访问。
+  - 承载数据库打开、建表、索引初始化与兼容迁移逻辑。
+  - 提供 users、intercept_state、intercept_requests、intercept_tool_calls 的读写与计数接口。
+  - 提供统一事务入口 `withTransaction`。
+- `src/sync/http-server.ts`
+  - 删除内嵌的数据库与数据处理函数（包含 `openDatabase`、迁移、SQL CRUD、事务封装等）。
+  - 所有数据读写改为调用 `interceptStore` 单例方法。
+  - 启动日志中的 db 文件路径改为由 store 提供。
+
+验证记录：
+- `npm run typecheck`：通过
+
 ### 17) 移除 LLM 会话链路 + 清理 /agent 与文档配置残留
 
 变更目标：
