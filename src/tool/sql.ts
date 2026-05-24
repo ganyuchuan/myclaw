@@ -80,7 +80,7 @@ export async function runSqlRequest({
   }
 
   const workDir = config.workDir || copilotConfig.workDir || process.cwd();
-  const dbFileRaw = String(config.dbFile ?? "data/myclaw.db").trim() || "data/myclaw.db";
+  const dbFileRaw = String(config.dbFile).trim() || "data/local.db";
   const dbFile = path.isAbsolute(dbFileRaw) ? dbFileRaw : path.resolve(workDir, dbFileRaw);
 
   const prompt = buildSqlGenerationPrompt({

@@ -310,7 +310,7 @@ Response payload:
 
 ### Copilot Hook 安全策略（基于 .env）
 
-Myclaw uses Copilot SDK hooks (`onPreToolUse`) to enforce a policy layer per session:
+Alimbo uses Copilot SDK hooks (`onPreToolUse`) to enforce a policy layer per session:
 
 - safe tool allowlist
 - allowed directory scope check
