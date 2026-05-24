@@ -1,13 +1,21 @@
 {
   "name": "alimbo",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "description": "An AI agent gateway for tool orchestration, automation, and chat integrations.",
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "alimbo": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json --noCheck",
     "postbuild": "mkdir -p dist/cloud && cp src/cloud/intercept-approval.html dist/cloud/intercept-approval.html",
+    "prepack": "npm run build",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "start": "npm run build && node dist/index.js",
     "dev": "tsc --watch -p tsconfig.json",
