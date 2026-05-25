@@ -145,6 +145,10 @@
           <button id="issueToken" class="primary">Issue Token</button>
           <button id="refreshUsers">Refresh Users</button>
         </div>
+        <div class="row" style="margin-top:8px;">
+          <label>Pairing Code <input id="pairingCode" type="text" placeholder="4 digits" maxlength="4" /></label>
+          <button id="resolvePairing" class="primary">Resolve Token by Pairing Code</button>
+        </div>
         <p class="meta" id="tokenStatus">Issue a token to start.</p>
         <div id="usersTable"></div>
       </div>
@@ -183,6 +187,8 @@
       const userNameInput = $("userName");
       const issueTokenBtn = $("issueToken");
       const refreshUsersBtn = $("refreshUsers");
+      const pairingCodeInput = $("pairingCode");
+      const resolvePairingBtn = $("resolvePairing");
       const decidedByInput = $("decidedBy");
       const statusEl = $("status");
       const tokenStatusEl = $("tokenStatus");
@@ -228,10 +234,58 @@
           throw new Error("empty auth token returned");
         }
 
+        const pairingCode = String(payload.pairingCode || "").trim();
+        if (pairingCode) {
+          pairingCodeInput.value = pairingCode;
+        }
+
         tokenInput.value = token;
         tokenStatusEl.className = "meta";
         tokenStatusEl.textContent =
-          "Token issued for userId=" + (payload.userId || "-") + " at " + new Date().toLocaleTimeString();
+          "Token issued for userId=" +
+          (payload.userId || "-") +
+          ", pairingCode=" +
+          (pairingCode || "-") +
+          ", expires=" +
+          ts(payload.pairingCodeExpiresAtMs || 0);
+
+        return payload;
+      }
+
+      async function resolvePairingToken() {
+        const pairingCode = String(pairingCodeInput.value || "").trim();
+        if (!/^\d{4}$/.test(pairingCode)) {
+          throw new Error("pairingCode must be 4 digits");
+        }
+
+        const response = await fetch("/auth/pairing-token", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({ pairingCode }),
+        });
+
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload.error || response.statusText || "resolve pairing token failed");
+        }
+
+        const token = String(payload.authToken || "").trim();
+        if (!token) {
+          throw new Error("empty auth token returned");
+        }
+
+        tokenInput.value = token;
+        tokenStatusEl.className = "meta";
+        tokenStatusEl.textContent =
+          "Resolved token for userId=" +
+          (payload.userId || "-") +
+          ", pairingCode=" +
+          (payload.pairingCode || pairingCode) +
+          ", expires=" +
+          ts(payload.expiresAtMs || 0);
 
         return payload;
       }
@@ -488,6 +542,18 @@
           tokenStatusEl.className = "error";
         } finally {
           refreshUsersBtn.disabled = false;
+        }
+      });
+      resolvePairingBtn.addEventListener("click", async () => {
+        resolvePairingBtn.disabled = true;
+        try {
+          await resolvePairingToken();
+          await refresh();
+        } catch (error) {
+          tokenStatusEl.textContent = String(error.message || error);
+          tokenStatusEl.className = "error";
+        } finally {
+          resolvePairingBtn.disabled = false;
         }
       });
       autoBtn.addEventListener("click", toggleAuto);

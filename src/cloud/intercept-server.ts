@@ -4,6 +4,7 @@ import dotenv from "dotenv";
 import fs from "node:fs";
 import os from "node:os";
 import { interceptStore } from "./intercept-store.js";
+import { createPairingCodeRegistry } from "./pairing-code-registry.js";
 
 dotenv.config();
 
@@ -59,6 +60,8 @@ const interceptAutoDenyTools = new Set(toList(process.env.CLOUD_INTERCEPT_AUTO_D
 const interceptWaitTimeoutMs = toInt(process.env.CLOUD_INTERCEPT_WAIT_TIMEOUT_MS, 60000);
 const interceptPollAfterMs = toInt(process.env.CLOUD_INTERCEPT_POLL_AFTER_MS, 1000);
 const maxStateEntries = 50;
+const pairingCodeTtlMs = 30 * 60 * 1000;
+const pairingCodeRegistry = createPairingCodeRegistry({ ttlMs: pairingCodeTtlMs });
 
 function setToArray(setLike) {
   return Array.isArray(setLike) ? setLike : [...setLike];
@@ -173,6 +176,10 @@ type Principal = {
 
 type AuthTokenBody = {
   userName?: string;
+};
+
+type PairingCodeResolveBody = {
+  pairingCode?: string;
 };
 
 function json(res, status, body) {
@@ -408,11 +415,41 @@ const server = createServer(async (req, res) => {
       }
 
       const issued = interceptStore.withTransaction(() => interceptStore.createUserTokenRecord({ userName }));
+      const pairing = pairingCodeRegistry.issue({
+        authToken: issued.authToken,
+        userId: issued.userId,
+        userName: issued.userName,
+      });
       return json(res, 200, {
         ok: true,
         userId: issued.userId,
         authToken: issued.authToken,
         userName: issued.userName,
+        pairingCode: pairing.pairingCode,
+        pairingCodeExpiresAtMs: pairing.expiresAtMs,
+        pairingCodeTtlMs,
+      });
+    }
+
+    if (req.method === "POST" && pathname === "/auth/pairing-token") {
+      const body = await parseBody<PairingCodeResolveBody>(req);
+      const pairingCode = String(body?.pairingCode ?? "").trim();
+      if (!/^\d{4}$/.test(pairingCode)) {
+        return json(res, 400, { error: "pairingCode must be 4 digits" });
+      }
+
+      const record = pairingCodeRegistry.resolve(pairingCode);
+      if (!record) {
+        return json(res, 404, { error: "pairingCode not found or expired" });
+      }
+
+      return json(res, 200, {
+        ok: true,
+        pairingCode: record.pairingCode,
+        userId: record.userId,
+        userName: record.userName,
+        authToken: record.authToken,
+        expiresAtMs: record.expiresAtMs,
       });
     }
 
