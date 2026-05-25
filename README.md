@@ -45,6 +45,20 @@ npm start
 npm run bridge:feishu
 ```
 
+5. Pairing-based first-time setup (desktop):
+
+```bash
+alimbo setup
+```
+
+The setup wizard will:
+- ask for pairing code
+- resolve token from cloud `/auth/pairing-token`
+- write `.env` using `.env.example` template
+- bind token to `GATEWAY_TOKEN`, `FEISHU_GATEWAY_TOKEN`, `FEISHU_INTERCEPT_AUTH_TOKEN`, `COPILOT_INTERCEPT_AUTH_TOKEN`
+- start gateway in background
+- verify cloud event pipeline through gateway `intercept.ping`
+
 ## 使用 wscat 工具与网关进行通信
 
 - 安装（可选全局或用 npx）：  
@@ -794,6 +808,13 @@ curl http://127.0.0.1:18790/health
 - `GET /api/jobs`：获取全部任务快照
 - `GET /api/jobs/:id`：获取单个任务
 - `GET /api/runs?jobId=<id>&limit=100`：获取执行记录
+
+配对与安装引导新增接口：
+
+- `POST /auth/token`：签发用户 token，并返回 `pairingCode` 与 `onboardingUrl`
+- `GET /`：cloud 根地址承接固定安装索引页（index.html）
+- `GET /SKILL.md`：安装技能文档原文（由 index 页面加载）
+- `POST /auth/pairing-token`：通过 4 位配对码换取 token（30 分钟有效期）
 
 当 `CLOUD_ENABLED=true` 时，alimbo gateway 会自动将以下数据同步到该服务：
 

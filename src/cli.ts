@@ -10,7 +10,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 function printHelp() {
-  console.log(`alimbo CLI\n\nUsage:\n  alimbo start\n  alimbo bridge:feishu\n  alimbo cloud\n  alimbo --help\n  alimbo --version`);
+  console.log(`alimbo CLI\n\nUsage:\n  alimbo start\n  alimbo bridge:feishu\n  alimbo cloud\n  alimbo setup\n  alimbo --help\n  alimbo --version`);
 }
 
 function runDistEntry(entryFile, args = []) {
@@ -60,6 +60,8 @@ if (command === "start") {
   runDistEntry("bridge/feishu.js", rest);
 } else if (command === "cloud") {
   runDistEntry("cloud/intercept-server.js", rest);
+} else if (command === "setup") {
+  runDistEntry("setup.js", rest);
 } else {
   console.error(`[alimbo] unknown command: ${command}`);
   printHelp();

@@ -10,11 +10,13 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    ".env.example",
+    "SKILL.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json --noCheck",
-    "postbuild": "mkdir -p dist/cloud && cp src/cloud/intercept-approval.html dist/cloud/intercept-approval.html",
+    "postbuild": "mkdir -p dist/cloud && cp src/cloud/intercept-approval.html dist/cloud/intercept-approval.html && cp src/cloud/index.html dist/cloud/index.html && cp src/cloud/SKILL.md dist/cloud/SKILL.md",
     "prepack": "npm run build",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "start": "npm run build && node dist/index.js",

@@ -192,8 +192,22 @@ function html(res, status, body) {
   res.end(body);
 }
 
+function toBaseUrl(req) {
+  const host = String(req?.headers?.host ?? "127.0.0.1:18790").trim() || "127.0.0.1:18790";
+  return `http://${host}`;
+}
+
+function buildOnboardingUrl(req) {
+  const baseUrl = toBaseUrl(req);
+  return `${baseUrl}/`;
+}
+
 const interceptApprovalPagePath = new URL("./intercept-approval.html", import.meta.url);
 let interceptApprovalPageCache = "";
+const indexPagePath = new URL("./index.html", import.meta.url);
+let indexPageCache = "";
+const onboardingMarkdownPath = new URL("./SKILL.md", import.meta.url);
+let onboardingMarkdownCache = "";
 
 function renderInterceptApprovalPage() {
   if (interceptApprovalPageCache) {
@@ -208,6 +222,36 @@ function renderInterceptApprovalPage() {
   }
 
   return interceptApprovalPageCache;
+}
+
+function renderIndexPage() {
+  if (indexPageCache) {
+    return indexPageCache;
+  }
+
+  try {
+    indexPageCache = fs.readFileSync(indexPagePath, "utf8");
+  } catch (error) {
+    console.warn(`[cloud-server][index] failed to load index page: ${String(error?.message ?? error)}`);
+    indexPageCache = "<!doctype html><html><body><h1>Index page unavailable</h1></body></html>";
+  }
+
+  return indexPageCache;
+}
+
+function renderOnboardingMarkdown() {
+  if (onboardingMarkdownCache) {
+    return onboardingMarkdownCache;
+  }
+
+  try {
+    onboardingMarkdownCache = fs.readFileSync(onboardingMarkdownPath, "utf8");
+  } catch (error) {
+    console.warn(`[cloud-server][onboarding] failed to load SKILL.md: ${String(error?.message ?? error)}`);
+    onboardingMarkdownCache = "# Onboarding\n\nUnavailable.";
+  }
+
+  return onboardingMarkdownCache;
 }
 
 function notFound(res) {
@@ -397,6 +441,16 @@ const server = createServer(async (req, res) => {
   const pathname = url.pathname;
 
   try {
+    if (req.method === "GET" && (pathname === "/" || pathname === "/index.html")) {
+      return html(res, 200, renderIndexPage());
+    }
+
+    if (req.method === "GET" && pathname === "/SKILL.md") {
+      res.writeHead(200, { "Content-Type": "text/markdown; charset=utf-8" });
+      res.end(renderOnboardingMarkdown());
+      return;
+    }
+
     if (req.method === "GET" && pathname === "/intercepts/approve") {
       return html(res, 200, renderInterceptApprovalPage());
     }
@@ -428,6 +482,7 @@ const server = createServer(async (req, res) => {
         pairingCode: pairing.pairingCode,
         pairingCodeExpiresAtMs: pairing.expiresAtMs,
         pairingCodeTtlMs,
+        onboardingUrl: buildOnboardingUrl(req),
       });
     }
 

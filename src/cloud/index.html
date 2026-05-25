@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Alimbo</title>
+    <style>
+      :root {
+        --bg: #f7fafc;
+        --text: #1f2937;
+        --line: #dbe3ec;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      }
+      pre {
+        margin: 0;
+        padding: 12px;
+        min-height: 100vh;
+        box-sizing: border-box;
+        background: #fff;
+        border: 1px solid var(--line);
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+    </style>
+  </head>
+  <body>
+    <pre id="skillContent">Loading SKILL.md ...</pre>
+
+    <script>
+      const skillContentEl = document.getElementById("skillContent");
+
+      async function loadSkill() {
+        try {
+          const response = await fetch("/SKILL.md", {
+            method: "GET",
+            headers: { Accept: "text/markdown,text/plain,*/*" },
+          });
+          const text = await response.text();
+          if (!response.ok) {
+            throw new Error(text || response.statusText || "failed to load SKILL.md");
+          }
+          skillContentEl.textContent = text;
+        } catch (error) {
+          skillContentEl.textContent = `Failed to load SKILL.md: ${String(error?.message || error)}`;
+        }
+      }
+
+      loadSkill();
+    </script>
+  </body>
+</html>

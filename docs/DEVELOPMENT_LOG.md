@@ -1,5 +1,42 @@
 # Development Log
 
+## 2026-05-25
+
+### 23) 配对码引导安装流程最小落地（cloud onboarding + setup 向导）
+
+变更目标：
+- 打通“移动/穿戴端发码 -> 电脑端打开引导页 -> 本地安装配置 -> 网关回传验收事件”的最小闭环。
+- 在不破坏现有审批链路的前提下，新增 onboarding 能力并保持最小改造成本。
+
+主要改动：
+- Cloud onboarding 页面与文档
+  - 新增 `src/cloud/index.html`，作为 cloud 根路径引导页。
+  - 新增 `src/cloud/SKILL.md`，由页面通过 `loadSkill` 从 `/SKILL.md` 加载展示。
+  - `src/cloud/intercept-server.ts` 新增静态路由：
+    - `GET /` 和 `GET /index.html` 返回 onboarding 页面
+    - `GET /SKILL.md` 返回技能文档
+- 配对码与 onboarding URL
+  - `/auth/token` 返回体新增 `onboardingUrl`，与 `pairingCode` 同时下发。
+  - `src/cloud/intercept-approval.html` 在发码后解析并展示 `onboardingUrl`。
+- CLI 与安装向导
+  - `src/cli.ts` 新增 `alimbo setup` 命令入口。
+  - 新增 `src/setup.ts`：
+    - 输入配对码并请求 `/auth/pairing-token`
+    - 将 token 绑定到 `GATEWAY_TOKEN`、`FEISHU_GATEWAY_TOKEN`、`FEISHU_INTERCEPT_AUTH_TOKEN`、`COPILOT_INTERCEPT_AUTH_TOKEN`
+    - 以 `.env.example` 生成/更新 `.env`
+    - 后台启动 gateway 并做健康检查
+    - 通过网关发送 `intercept.ping` 做 cloud 事件链路验收
+- 网关验收方法
+  - `src/gateway/gateway-server.ts` 新增 `intercept.ping` 方法并加入 methods 列表。
+  - `intercept.ping` 会调用 cloud `/api/copilot/intercepts/event`，用于安装完成后的最小验收。
+- 打包与文档同步
+  - `package.json`：`postbuild` 增加复制 `src/cloud/index.html`、`src/cloud/SKILL.md`。
+  - `README.md`：补充 onboarding 与 `alimbo setup` 流程说明。
+  - 根目录历史 `SKILL.md` 删除，改为 cloud 模块内聚管理。
+
+验证记录：
+- `npm run build`：通过
+
 ## 2026-05-24
 
 ### 22) npm 全局安装发布最小流程落地（alimbo CLI）

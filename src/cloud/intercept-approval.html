@@ -150,6 +150,7 @@
           <button id="resolvePairing" class="primary">Resolve Token by Pairing Code</button>
         </div>
         <p class="meta" id="tokenStatus">Issue a token to start.</p>
+        <p class="meta" id="onboardingStatus"></p>
         <div id="usersTable"></div>
       </div>
 
@@ -192,6 +193,7 @@
       const decidedByInput = $("decidedBy");
       const statusEl = $("status");
       const tokenStatusEl = $("tokenStatus");
+      const onboardingStatusEl = $("onboardingStatus");
       const usersTableEl = $("usersTable");
       const listEl = $("list");
       const toolCallsEl = $("toolCalls");
@@ -239,6 +241,8 @@
           pairingCodeInput.value = pairingCode;
         }
 
+        const onboardingURL = String(payload.onboardingUrl || "").trim();
+
         tokenInput.value = token;
         tokenStatusEl.className = "meta";
         tokenStatusEl.textContent =
@@ -248,6 +252,18 @@
           (pairingCode || "-") +
           ", expires=" +
           ts(payload.pairingCodeExpiresAtMs || 0);
+
+        onboardingStatusEl.className = "meta";
+        if (onboardingURL) {
+          onboardingStatusEl.innerHTML =
+            'Onboarding URL: <a href="' +
+            onboardingURL.replace(/"/g, "&quot;") +
+            '" target="_blank" rel="noopener noreferrer">' +
+            onboardingURL +
+            "</a>";
+        } else {
+          onboardingStatusEl.textContent = "Onboarding URL: -";
+        }
 
         return payload;
       }
@@ -286,6 +302,8 @@
           (payload.pairingCode || pairingCode) +
           ", expires=" +
           ts(payload.expiresAtMs || 0);
+        onboardingStatusEl.className = "meta";
+        onboardingStatusEl.textContent = "";
 
         return payload;
       }
