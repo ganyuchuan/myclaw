@@ -705,8 +705,8 @@ class InterceptStore {
     return countTotalFromDb(this.db, "intercept_requests", userId);
   }
 
-  createUserTokenRecord({ userName, now = Date.now() }) {
-    const normalizedUserName = String(userName ?? "").trim();
+  createUserTokenRecord({ username, now = Date.now() }) {
+    const normalizedUsername = String(username ?? "").trim();
 
     for (let i = 0; i < 6; i += 1) {
       const userId = generateUserId();
@@ -715,12 +715,12 @@ class InterceptStore {
         this.db.prepare(`
           INSERT INTO users (user_id, user_name, auth_token, created_at_ms, updated_at_ms)
           VALUES (?, ?, ?, ?, ?)
-        `).run(userId, normalizedUserName, authToken, now, now);
+        `).run(userId, normalizedUsername, authToken, now, now);
 
         return {
           userId,
           authToken,
-          userName: normalizedUserName,
+          username: normalizedUsername,
         };
       } catch (error) {
         const message = String(error?.message ?? error).toLowerCase();
@@ -747,7 +747,7 @@ class InterceptStore {
 
     return {
       userId: String(row.user_id ?? "").trim(),
-      userName: String(row.user_name ?? "").trim(),
+      username: String(row.user_name ?? "").trim(),
       authToken: String(row.auth_token ?? "").trim(),
       source: "user",
     };
@@ -764,7 +764,7 @@ class InterceptStore {
 
     return rows.map((row) => ({
       userId: String(row.user_id ?? "").trim(),
-      userName: String(row.user_name ?? "").trim(),
+      username: String(row.user_name ?? "").trim(),
       authToken: String(row.auth_token ?? "").trim(),
       createdAtMs: Number.isFinite(row.created_at_ms) ? row.created_at_ms : 0,
       updatedAtMs: Number.isFinite(row.updated_at_ms) ? row.updated_at_ms : 0,

@@ -3,13 +3,13 @@ import crypto from "node:crypto";
 export type PairingCodeIssueInput = {
   authToken: string;
   userId: string;
-  userName: string;
+  username: string;
 };
 
 type PairingCodeRecord = {
   authToken: string;
   userId: string;
-  userName: string;
+  username: string;
   expiresAtMs: number;
 };
 
@@ -17,7 +17,7 @@ export type PairingCodeResolveResult = {
   pairingCode: string;
   authToken: string;
   userId: string;
-  userName: string;
+  username: string;
   expiresAtMs: number;
 };
 
@@ -42,7 +42,7 @@ export function createPairingCodeRegistry({ ttlMs }: { ttlMs: number }) {
     }
   };
 
-  const issue = ({ authToken, userId, userName }: PairingCodeIssueInput) => {
+  const issue = ({ authToken, userId, username }: PairingCodeIssueInput) => {
     cleanup();
 
     const previousCode = codeByToken.get(authToken);
@@ -66,7 +66,7 @@ export function createPairingCodeRegistry({ ttlMs }: { ttlMs: number }) {
     }
 
     const expiresAtMs = nowMs() + ttlMs;
-    const record: PairingCodeRecord = { authToken, userId, userName, expiresAtMs };
+    const record: PairingCodeRecord = { authToken, userId, username, expiresAtMs };
     byCode.set(code, record);
     codeByToken.set(authToken, code);
 
@@ -98,7 +98,7 @@ export function createPairingCodeRegistry({ ttlMs }: { ttlMs: number }) {
       pairingCode: normalized,
       authToken: record.authToken,
       userId: record.userId,
-      userName: record.userName,
+      username: record.username,
       expiresAtMs: record.expiresAtMs,
     };
   };

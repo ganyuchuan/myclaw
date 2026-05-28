@@ -59,6 +59,12 @@ The setup wizard will:
 - start gateway in background
 - verify cloud event pipeline through gateway `intercept.ping`
 
+## Cloud Auth API
+
+`/auth/token` 与 `/auth/pairing-token` 的完整接入说明已迁移至独立文档：
+
+- [docs/CLOUD_AUTH_API.md](docs/CLOUD_AUTH_API.md)
+
 ## 使用 wscat 工具与网关进行通信
 
 - 安装（可选全局或用 npx）：  

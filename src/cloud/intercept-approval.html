@@ -141,7 +141,7 @@
       <div class="panel">
         <h1 class="title">Auth Token Manager</h1>
         <div class="row">
-          <label>User Name <input id="userName" value="admin" placeholder="required" /></label>
+          <label>User Name <input id="username" value="admin" placeholder="required" /></label>
           <button id="issueToken" class="primary">Issue Token</button>
           <button id="refreshUsers">Refresh Users</button>
         </div>
@@ -185,7 +185,7 @@
     <script>
       const $ = (id) => document.getElementById(id);
       const tokenInput = $("token");
-      const userNameInput = $("userName");
+      const usernameInput = $("username");
       const issueTokenBtn = $("issueToken");
       const refreshUsersBtn = $("refreshUsers");
       const pairingCodeInput = $("pairingCode");
@@ -213,9 +213,9 @@
       }
 
       async function issueAuthToken() {
-        const userName = String(userNameInput.value || "").trim();
-        if (!userName) {
-          throw new Error("userName is required");
+        const username = String(usernameInput.value || "").trim();
+        if (!username) {
+          throw new Error("username is required");
         }
 
         const response = await fetch("/auth/token", {
@@ -224,7 +224,7 @@
             "Content-Type": "application/json",
             Accept: "application/json",
           },
-          body: JSON.stringify({ userName }),
+          body: JSON.stringify({ username }),
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
@@ -489,7 +489,7 @@
           html +=
             "<tr>" +
             "<td>" + (item.userId || "-") + "</td>" +
-            "<td>" + (item.userName || "-") + "</td>" +
+            "<td>" + (item.username || "-") + "</td>" +
             '<td class="token-cell">' + (item.authToken || "-") + "</td>" +
             "<td>" + ts(item.updatedAtMs || item.createdAtMs || 0) + "</td>" +
             "</tr>";

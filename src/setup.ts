@@ -1,18 +1,22 @@
 #!/usr/bin/env node
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import readline from "node:readline/promises";
+import { fileURLToPath } from "node:url";
 import { WebSocket } from "ws";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 type PairingTokenPayload = {
   ok?: boolean;
   pairingCode?: string;
   authToken?: string;
   userId?: string;
-  userName?: string;
+  username?: string;
   expiresAtMs?: number;
 };
 
@@ -130,9 +134,57 @@ function startGatewayDetached(cwd: string) {
     cwd,
     env: process.env,
     detached: true,
-    stdio: "ignore",
+    stdio: "inherit",
   });
   child.unref();
+}
+
+function listListeningPidsByPort(port: number) {
+  const result = spawnSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"], {
+    encoding: "utf8",
+  });
+
+  if (result.status !== 0) {
+    return [] as number[];
+  }
+
+  return String(result.stdout ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => Number.parseInt(line, 10))
+    .filter((pid) => Number.isInteger(pid) && pid > 0 && pid !== process.pid);
+}
+
+async function stopGatewayProcessesOnPort(port: number) {
+  const pids = listListeningPidsByPort(port);
+  if (!pids.length) {
+    return;
+  }
+
+  console.log(`[alimbo-setup] Stop existing process(es) on :${port} -> ${pids.join(", ")}`);
+
+  for (const pid of pids) {
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {
+      // Process may have exited already.
+    }
+  }
+
+  const startedAt = Date.now();
+  const timeoutMs = 5_000;
+  while (Date.now() - startedAt < timeoutMs) {
+    if (!listListeningPidsByPort(port).length) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+
+  const remaining = listListeningPidsByPort(port);
+  if (remaining.length) {
+    throw new Error(`failed to stop existing gateway process on :${port}; still listening pid(s): ${remaining.join(", ")}`);
+  }
 }
 
 function requestGatewayFrame({ wsUrl, frame, timeoutMs }: { wsUrl: string; frame: any; timeoutMs: number }) {
@@ -204,42 +256,119 @@ function requestGatewayFrame({ wsUrl, frame, timeoutMs }: { wsUrl: string; frame
   });
 }
 
+function requestGatewayFrames({ wsUrl, frames, timeoutMs }: { wsUrl: string; frames: any[]; timeoutMs: number }) {
+  return new Promise<any[]>((resolve, reject) => {
+    const socket = new WebSocket(wsUrl);
+    const responses: any[] = [];
+    const pendingIds = new Set<string>(frames.map((frame) => String(frame?.id ?? "")).filter(Boolean));
+    let closed = false;
+
+    const finish = (error: Error | null, payload?: any[]) => {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      try {
+        socket.close();
+      } catch {
+        // no-op
+      }
+      if (error) {
+        reject(error);
+      } else {
+        resolve(payload ?? []);
+      }
+    };
+
+    const timeout = setTimeout(() => {
+      finish(new Error(`gateway request timeout after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    socket.on("open", () => {
+      for (const frame of frames) {
+        socket.send(JSON.stringify(frame));
+      }
+    });
+
+    socket.on("message", (raw) => {
+      const text = raw.toString("utf8");
+      let message: any = null;
+      try {
+        message = JSON.parse(text);
+      } catch {
+        return;
+      }
+
+      if (message?.type !== "res") {
+        return;
+      }
+
+      const responseId = String(message?.id ?? "");
+      if (!pendingIds.has(responseId)) {
+        return;
+      }
+
+      if (!message?.ok) {
+        clearTimeout(timeout);
+        finish(new Error(String(message?.error?.message ?? "gateway request failed")));
+        return;
+      }
+
+      pendingIds.delete(responseId);
+      responses.push(message?.payload ?? {});
+      if (!pendingIds.size) {
+        clearTimeout(timeout);
+        finish(null, responses);
+      }
+    });
+
+    socket.on("error", (error) => {
+      clearTimeout(timeout);
+      finish(new Error(String((error as any)?.message ?? error)));
+    });
+
+    socket.on("close", () => {
+      if (!closed) {
+        clearTimeout(timeout);
+        finish(new Error("gateway socket closed before response"));
+      }
+    });
+  });
+}
+
 async function runGatewayInterceptPing({ gatewayToken, cloudBaseUrl, pairingCode }: { gatewayToken: string; cloudBaseUrl: string; pairingCode: string }) {
   const gatewayPort = toInt(process.env.PORT, 18789);
   const wsUrl = `ws://127.0.0.1:${gatewayPort}/ws`;
   const connectId = `connect_${Date.now()}`;
-
-  await requestGatewayFrame({
-    wsUrl,
-    timeoutMs: 10_000,
-    frame: {
-      type: "req",
-      id: connectId,
-      method: "connect",
-      params: {
-        auth: { token: gatewayToken },
-        client: { id: "alimbo-setup", version: "0.1.0" },
-      },
-    },
-  });
-
   const pingId = `ping_${Date.now()}`;
-  const payload = await requestGatewayFrame({
+
+  const [, pingPayload] = await requestGatewayFrames({
     wsUrl,
     timeoutMs: 10_000,
-    frame: {
-      type: "req",
-      id: pingId,
-      method: "intercept.ping",
-      params: {
-        message: "setup verification event",
-        pairingCode,
-        cloudBaseUrl,
+    frames: [
+      {
+        type: "req",
+        id: connectId,
+        method: "connect",
+        params: {
+          auth: { token: gatewayToken },
+          client: { id: "alimbo-setup", version: "0.1.0" },
+        },
       },
-    },
+      {
+        type: "req",
+        id: pingId,
+        method: "intercept.ping",
+        params: {
+          message: "setup verification event",
+          pairingCode,
+          cloudBaseUrl,
+        },
+      },
+    ],
   });
 
-  return payload;
+  return pingPayload;
 }
 
 async function main() {
@@ -278,10 +407,12 @@ async function main() {
     fs.writeFileSync(envPath, envText, "utf8");
     console.log(`[alimbo-setup] Wrote ${envPath}`);
 
+    const gatewayPort = toInt(process.env.PORT, 18789);
+    await stopGatewayProcessesOnPort(gatewayPort);
+
     console.log("[alimbo-setup] Start gateway in background ...");
     startGatewayDetached(cwd);
 
-    const gatewayPort = toInt(process.env.PORT, 18789);
     await waitForGatewayHealth({
       baseUrl: `http://127.0.0.1:${gatewayPort}`,
       timeoutMs: 20_000,
@@ -299,7 +430,7 @@ async function main() {
     console.log(JSON.stringify({
       ok: true,
       userId: pairingPayload.userId,
-      userName: pairingPayload.userName,
+      username: pairingPayload.username,
       pairingCode,
       cloudBaseUrl,
       ping,

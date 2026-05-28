@@ -1,5 +1,43 @@
 # Development Log
 
+## 2026-05-28
+
+### 24) cloud 鉴权字段统一 + setup 稳定性修复 + API 文档拆分
+
+变更目标：
+- 统一 cloud 用户字段命名为 `username`，避免前后端混用 `userName` 导致的解析歧义。
+- 修复 setup 在重复执行时的稳定性问题（端口占用、WS 首帧顺序约束）。
+- 将 cloud auth 接口说明拆分为 docs 独立文档，降低 README 维护负担。
+
+主要改动：
+- cloud 鉴权字段统一
+  - `src/cloud/intercept-server.ts`
+    - `/auth/token` 请求字段从 `userName` 调整为 `username`。
+    - `/auth/token`、`/auth/pairing-token` 返回字段统一为 `username`。
+    - `requireInterceptAuth` 中 principal 字段由 `userName` 统一为 `username`。
+  - `src/cloud/intercept-store.ts`
+    - `createUserTokenRecord` 入参改为 `username`。
+    - users 相关读取返回字段统一为 `username`。
+  - `src/cloud/pairing-code-registry.ts`
+    - issue/resolve 类型与数据字段统一为 `username`。
+  - `src/cloud/intercept-approval.html`
+    - token 签发请求体改为 `{ username }`。
+    - users 表渲染字段改为 `username`。
+- setup 稳定性修复
+  - `src/setup.ts`
+    - ESM 路径兼容：使用 `fileURLToPath(import.meta.url)` 计算 `__dirname`。
+    - 启动前端口治理：新增占用 `18789` 监听进程探测与停止逻辑，避免旧网关残留导致冲突。
+    - 调试可见性：后台启动网关 `stdio` 改为 `inherit`，便于直接观察子进程报错。
+    - WS 协议顺序修复：`connect` 与 `intercept.ping` 改为同一连接内按序发送，修复 `first method must be connect`。
+    - 输出字段同步改为 `username`。
+- 文档拆分
+  - 新增 `docs/CLOUD_AUTH_API.md`，集中维护 `/auth/token`、`/auth/pairing-token` 接入说明。
+  - `README.md` 对应章节改为指向 docs 的入口链接。
+
+验证记录：
+- `npm run build`：通过
+- `node dist/setup.js`：通过
+
 ## 2026-05-25
 
 ### 23) 配对码引导安装流程最小落地（cloud onboarding + setup 向导）
@@ -160,8 +198,8 @@
 主要改动：
 - `src/sync/http-server.ts`
   - 删除 `Principal` / `AuthTokenBody` 中的 `authType` 字段。
-  - `/auth/token` 仅接收 `userName`，由服务端生成 128-bit auth token。
-  - `requireInterceptAuth` 仅返回 `userId` / `authToken` / `userName`。
+  - `/auth/token` 仅接收 `username`，由服务端生成 128-bit auth token。
+  - `requireInterceptAuth` 仅返回 `userId` / `authToken` / `username`。
   - `users` 表继续保留 `auth_type` 列定义，但不再在运行逻辑中使用。
 - `src/sync/intercept-approval.html`
   - 删除 auth type 输入框。
@@ -187,9 +225,9 @@
   - 新增 `GET /auth/users` 接口（支持 `limit`）。
   - `requireInterceptAuth` 删除 `x-intercept-token` 兜底读取，仅使用 Authorization Bearer。
 - `src/sync/intercept-approval.html`
-  - 新增 `Auth Token Manager` 面板：`userName` + `Issue Token` + `Refresh Users`。
-  - 新增 users 表展示（`userId/userName/authToken/updatedAt`）。
-  - `Intercept Waiting Approval` 面板移除 `userName`，改为支持手动输入 `auth token`。
+  - 新增 `Auth Token Manager` 面板：`username` + `Issue Token` + `Refresh Users`。
+  - 新增 users 表展示（`userId/username/authToken/updatedAt`）。
+  - `Intercept Waiting Approval` 面板移除 `username`，改为支持手动输入 `auth token`。
 
 验证记录：
 - `npm run build`：通过

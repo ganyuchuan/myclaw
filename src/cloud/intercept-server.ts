@@ -170,12 +170,12 @@ type InterceptEventBody = {
 type Principal = {
   userId: string;
   authToken: string;
-  userName: string;
+  username: string;
   source: "user";
 };
 
 type AuthTokenBody = {
-  userName?: string;
+  username?: string;
 };
 
 type PairingCodeResolveBody = {
@@ -400,7 +400,7 @@ function requireInterceptAuth(req, res) {
       return {
         userId: userPrincipal.userId,
         authToken: provided,
-        userName: userPrincipal.userName,
+        username: userPrincipal.username,
         source: "user",
       };
     }
@@ -463,22 +463,22 @@ const server = createServer(async (req, res) => {
 
     if (req.method === "POST" && pathname === "/auth/token") {
       const body = await parseBody<AuthTokenBody>(req);
-      const userName = String(body?.userName ?? "").trim();
-      if (!userName) {
-        return json(res, 400, { error: "userName is required" });
+      const username = String(body?.username ?? "").trim();
+      if (!username) {
+        return json(res, 400, { error: "username is required" });
       }
 
-      const issued = interceptStore.withTransaction(() => interceptStore.createUserTokenRecord({ userName }));
+      const issued = interceptStore.withTransaction(() => interceptStore.createUserTokenRecord({ username }));
       const pairing = pairingCodeRegistry.issue({
         authToken: issued.authToken,
         userId: issued.userId,
-        userName: issued.userName,
+        username: issued.username,
       });
       return json(res, 200, {
         ok: true,
         userId: issued.userId,
         authToken: issued.authToken,
-        userName: issued.userName,
+        username: issued.username,
         pairingCode: pairing.pairingCode,
         pairingCodeExpiresAtMs: pairing.expiresAtMs,
         pairingCodeTtlMs,
@@ -502,7 +502,7 @@ const server = createServer(async (req, res) => {
         ok: true,
         pairingCode: record.pairingCode,
         userId: record.userId,
-        userName: record.userName,
+        username: record.username,
         authToken: record.authToken,
         expiresAtMs: record.expiresAtMs,
       });
