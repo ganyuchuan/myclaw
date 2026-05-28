@@ -29,9 +29,9 @@ alimbo setup
   - COPILOT_INTERCEPT_AUTH_TOKEN
 - Create .env from .env.example when needed
 - Start alimbo gateway in background
-- Send a gateway intercept ping to verify cloud reporting path
+- Verify gateway health endpoint
 
-5. If verification fails, request a new pairing code and run setup again.
+5. If setup fails, request a new pairing code and run setup again.
 
 ## Manual Mode
 

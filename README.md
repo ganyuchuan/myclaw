@@ -57,7 +57,7 @@ The setup wizard will:
 - write `.env` using `.env.example` template
 - bind token to `GATEWAY_TOKEN`, `FEISHU_GATEWAY_TOKEN`, `FEISHU_INTERCEPT_AUTH_TOKEN`, `COPILOT_INTERCEPT_AUTH_TOKEN`
 - start gateway in background
-- verify cloud event pipeline through gateway `intercept.ping`
+- verify gateway health
 
 ## Cloud Auth API
 

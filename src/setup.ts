@@ -6,7 +6,6 @@ import path from "node:path";
 import process from "node:process";
 import readline from "node:readline/promises";
 import { fileURLToPath } from "node:url";
-import { WebSocket } from "ws";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -187,190 +186,6 @@ async function stopGatewayProcessesOnPort(port: number) {
   }
 }
 
-function requestGatewayFrame({ wsUrl, frame, timeoutMs }: { wsUrl: string; frame: any; timeoutMs: number }) {
-  return new Promise<any>((resolve, reject) => {
-    const socket = new WebSocket(wsUrl);
-    let closed = false;
-
-    const finish = (error: Error | null, payload?: any) => {
-      if (closed) {
-        return;
-      }
-      closed = true;
-      try {
-        socket.close();
-      } catch {
-        // no-op
-      }
-      if (error) {
-        reject(error);
-      } else {
-        resolve(payload);
-      }
-    };
-
-    const timeout = setTimeout(() => {
-      finish(new Error(`gateway request timeout after ${timeoutMs}ms`));
-    }, timeoutMs);
-
-    socket.on("open", () => {
-      socket.send(JSON.stringify(frame));
-    });
-
-    socket.on("message", (raw) => {
-      const text = raw.toString("utf8");
-      let message: any = null;
-      try {
-        message = JSON.parse(text);
-      } catch {
-        return;
-      }
-
-      if (message?.type !== "res") {
-        return;
-      }
-
-      if (message?.id !== frame.id) {
-        return;
-      }
-
-      clearTimeout(timeout);
-      if (message?.ok) {
-        finish(null, message?.payload ?? {});
-      } else {
-        finish(new Error(String(message?.error?.message ?? "gateway request failed")));
-      }
-    });
-
-    socket.on("error", (error) => {
-      clearTimeout(timeout);
-      finish(new Error(String((error as any)?.message ?? error)));
-    });
-
-    socket.on("close", () => {
-      if (!closed) {
-        clearTimeout(timeout);
-        finish(new Error("gateway socket closed before response"));
-      }
-    });
-  });
-}
-
-function requestGatewayFrames({ wsUrl, frames, timeoutMs }: { wsUrl: string; frames: any[]; timeoutMs: number }) {
-  return new Promise<any[]>((resolve, reject) => {
-    const socket = new WebSocket(wsUrl);
-    const responses: any[] = [];
-    const pendingIds = new Set<string>(frames.map((frame) => String(frame?.id ?? "")).filter(Boolean));
-    let closed = false;
-
-    const finish = (error: Error | null, payload?: any[]) => {
-      if (closed) {
-        return;
-      }
-      closed = true;
-      try {
-        socket.close();
-      } catch {
-        // no-op
-      }
-      if (error) {
-        reject(error);
-      } else {
-        resolve(payload ?? []);
-      }
-    };
-
-    const timeout = setTimeout(() => {
-      finish(new Error(`gateway request timeout after ${timeoutMs}ms`));
-    }, timeoutMs);
-
-    socket.on("open", () => {
-      for (const frame of frames) {
-        socket.send(JSON.stringify(frame));
-      }
-    });
-
-    socket.on("message", (raw) => {
-      const text = raw.toString("utf8");
-      let message: any = null;
-      try {
-        message = JSON.parse(text);
-      } catch {
-        return;
-      }
-
-      if (message?.type !== "res") {
-        return;
-      }
-
-      const responseId = String(message?.id ?? "");
-      if (!pendingIds.has(responseId)) {
-        return;
-      }
-
-      if (!message?.ok) {
-        clearTimeout(timeout);
-        finish(new Error(String(message?.error?.message ?? "gateway request failed")));
-        return;
-      }
-
-      pendingIds.delete(responseId);
-      responses.push(message?.payload ?? {});
-      if (!pendingIds.size) {
-        clearTimeout(timeout);
-        finish(null, responses);
-      }
-    });
-
-    socket.on("error", (error) => {
-      clearTimeout(timeout);
-      finish(new Error(String((error as any)?.message ?? error)));
-    });
-
-    socket.on("close", () => {
-      if (!closed) {
-        clearTimeout(timeout);
-        finish(new Error("gateway socket closed before response"));
-      }
-    });
-  });
-}
-
-async function runGatewayInterceptPing({ gatewayToken, cloudBaseUrl, pairingCode }: { gatewayToken: string; cloudBaseUrl: string; pairingCode: string }) {
-  const gatewayPort = toInt(process.env.PORT, 18789);
-  const wsUrl = `ws://127.0.0.1:${gatewayPort}/ws`;
-  const connectId = `connect_${Date.now()}`;
-  const pingId = `ping_${Date.now()}`;
-
-  const [, pingPayload] = await requestGatewayFrames({
-    wsUrl,
-    timeoutMs: 10_000,
-    frames: [
-      {
-        type: "req",
-        id: connectId,
-        method: "connect",
-        params: {
-          auth: { token: gatewayToken },
-          client: { id: "alimbo-setup", version: "0.1.0" },
-        },
-      },
-      {
-        type: "req",
-        id: pingId,
-        method: "intercept.ping",
-        params: {
-          message: "setup verification event",
-          pairingCode,
-          cloudBaseUrl,
-        },
-      },
-    ],
-  });
-
-  return pingPayload;
-}
-
 async function main() {
   const cwd = process.cwd();
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -419,13 +234,6 @@ async function main() {
     });
     console.log("[alimbo-setup] Gateway is healthy");
 
-    console.log("[alimbo-setup] Send intercept ping through gateway ...");
-    const ping = await runGatewayInterceptPing({
-      gatewayToken: token,
-      cloudBaseUrl,
-      pairingCode,
-    });
-
     console.log("[alimbo-setup] Success");
     console.log(JSON.stringify({
       ok: true,
@@ -433,7 +241,6 @@ async function main() {
       username: pairingPayload.username,
       pairingCode,
       cloudBaseUrl,
-      ping,
     }, null, 2));
   } catch (error) {
     console.error(`[alimbo-setup] Failed: ${String((error as any)?.message ?? error)}`);

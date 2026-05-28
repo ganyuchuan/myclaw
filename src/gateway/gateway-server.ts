@@ -16,39 +16,7 @@ import {
   safeParseJson,
 } from "./protocol.js";
 
-const METHODS = ["connect", "copilot", "git", "sql", "service.list", "service.start", "service.stop", "service.restart", "service.logs", "skills.list", "skills.add", "skills.remove", "mcp.list", "mcp.add", "mcp.remove", "cron.list", "cron.add", "cron.update", "cron.remove", "cron.run", "cron.nl", "intercept.ping", "health"];
-
-function toPositiveInt(value, fallback) {
-  const parsed = Number.parseInt(String(value ?? ""), 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-}
-
-function trimTrailingSlash(url) {
-  return String(url ?? "").trim().replace(/\/+$/, "");
-}
-
-async function fetchJsonWithTimeout(
-  url,
-  { method = "GET", headers = {}, body = undefined, timeoutMs = 5000 } = {},
-) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), toPositiveInt(timeoutMs, 5000));
-  try {
-    const response = await fetch(url, {
-      method,
-      headers,
-      body,
-      signal: controller.signal,
-    });
-    const payload = await response.json().catch(() => null);
-    if (!response.ok) {
-      throw new Error(`http ${response.status}: ${String(payload?.error ?? response.statusText)}`);
-    }
-    return payload;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
+const METHODS = ["connect", "copilot", "git", "sql", "service.list", "service.start", "service.stop", "service.restart", "service.logs", "skills.list", "skills.add", "skills.remove", "mcp.list", "mcp.add", "mcp.remove", "cron.list", "cron.add", "cron.update", "cron.remove", "cron.run", "cron.nl", "health"];
 
 export function createGatewayServer(config, { cronScheduler } = { cronScheduler: undefined }) {
   const connections = new Map();
@@ -252,56 +220,6 @@ export function createGatewayServer(config, { cronScheduler } = { cronScheduler:
           socket.send(
             JSON.stringify(
               makeResponse(frame.id, true, { output, sessionId: sessionId || undefined }),
-            ),
-          );
-          return;
-        }
-
-        if (frame.method === "intercept.ping") {
-          const interceptServerUrl = trimTrailingSlash(
-            String(frame.params?.cloudBaseUrl ?? config.copilot?.interceptServerUrl ?? ""),
-          );
-          const interceptAuthToken = String(config.copilot?.interceptAuthToken ?? "").trim();
-          if (!interceptServerUrl) {
-            socket.send(JSON.stringify(badRequest(frame.id, "intercept server url is not configured")));
-            return;
-          }
-          if (!interceptAuthToken) {
-            socket.send(JSON.stringify(badRequest(frame.id, "COPILOT_INTERCEPT_AUTH_TOKEN is required")));
-            return;
-          }
-
-          const eventPayload = {
-            msg: String(frame.params?.message ?? "setup intercept ping").trim() || "setup intercept ping",
-            entry: `Gateway intercept ping at ${new Date().toISOString()}`,
-            prompt: {
-              id: `setup_ping_${Date.now()}`,
-              tool: "setup",
-              hint: String(frame.params?.pairingCode ?? "").trim() || "pairing flow verification",
-            },
-            state: {
-              completed: true,
-            },
-          };
-
-          const payload = await fetchJsonWithTimeout(`${interceptServerUrl}/api/copilot/intercepts/event`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Accept: "application/json",
-              Authorization: `Bearer ${interceptAuthToken}`,
-            },
-            timeoutMs: toPositiveInt(config.copilot?.interceptTimeoutMs, 5000),
-            body: JSON.stringify({ event: eventPayload }),
-          });
-
-          socket.send(
-            JSON.stringify(
-              makeResponse(frame.id, true, {
-                ok: true,
-                event: eventPayload,
-                server: payload,
-              }),
             ),
           );
           return;
