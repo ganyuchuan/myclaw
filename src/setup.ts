@@ -185,6 +185,11 @@ async function reportSetupInterceptVerificationEvent({
     reason: string;
   };
 }) {
+  const estimatedAtMs = Date.now();
+  const promptTokens = 28;
+  const outputTokens = 12;
+  const totalTokens = promptTokens + outputTokens;
+
   await reportInterceptEventByApi({
     interceptServerUrl: cloudBaseUrl,
     interceptAuthToken: authToken,
@@ -197,10 +202,19 @@ async function reportSetupInterceptVerificationEvent({
         tool: "setup.healthcheck",
         hint: verification.reason || "setup decision api connectivity check",
       },
+      tokenEstimate: {
+        sessionId: "setup",
+        promptTokens,
+        outputTokens,
+        totalTokens,
+        promptPreview: "[mock] setup.healthcheck prompt for intercept verification",
+        outputPreview: `[mock] setup verification completed with decision=${verification.decision}`,
+        estimatedAtMs,
+      },
       session: {
         id: "setup",
         phase: "setup-intercept-verify",
-        ts: Date.now(),
+        ts: estimatedAtMs,
         workDir,
       },
       completed: true,

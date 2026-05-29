@@ -19,10 +19,10 @@
     "postbuild": "mkdir -p dist/cloud && cp src/cloud/intercept-approval.html dist/cloud/intercept-approval.html && cp src/cloud/index.html dist/cloud/index.html && cp src/cloud/SKILL.md dist/cloud/SKILL.md",
     "prepack": "npm run build",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "start": "npm run build && node dist/index.js",
+    "start": "npm run build && node --title=alimbo-gateway dist/index.js",
     "dev": "tsc --watch -p tsconfig.json",
-    "bridge:feishu": "npm run build && node dist/bridge/feishu.js",
-    "cloud": "npm run build && node dist/cloud/intercept-server.js"
+    "bridge:feishu": "npm run build && node --title=alimbo-feishu dist/bridge/feishu.js",
+    "cloud": "npm run build && node --title=alimbo-cloud dist/cloud/intercept-server.js"
   },
   "engines": {
     "node": ">=22"

@@ -6,6 +6,8 @@ import os from "node:os";
 import { interceptStore } from "./intercept-store.js";
 import { createPairingCodeRegistry } from "./pairing-code-registry.js";
 
+process.title = process.env.PROCESS_TITLE || "alimbo-cloud";
+
 dotenv.config();
 
 function toInt(value, fallback) {
@@ -807,6 +809,19 @@ const server = createServer(async (req, res) => {
           return json(res, 400, { error: "invalid event payload" });
         }
 
+        const eventMsg = String(event.msg ?? "").trim();
+        const eventEntry = String(event.entry ?? "").trim();
+        const eventPromptId = String(event.prompt?.id ?? "").trim();
+        const eventPromptTool = String(event.prompt?.tool ?? "").trim();
+        const eventTokens = Number.parseInt(String(event.tokens ?? "0"), 10);
+        const hasToolCall = Boolean(event.toolCall && typeof event.toolCall === "object");
+        const hasTokenEstimate = Boolean(event.tokenEstimate && typeof event.tokenEstimate === "object");
+        const hasStatePatch = Boolean(event.state && typeof event.state === "object");
+
+        console.log(
+          `[cloud-server][intercept] event received user=${principalUserId} msg=${eventMsg ? "yes" : "no"} entry=${eventEntry ? "yes" : "no"} promptId=${eventPromptId || "-"} promptTool=${eventPromptTool || "-"} tokens=${Number.isFinite(eventTokens) ? eventTokens : 0} toolCall=${hasToolCall ? "yes" : "no"} tokenEstimate=${hasTokenEstimate ? "yes" : "no"} statePatch=${hasStatePatch ? "yes" : "no"} completed=${event.completed === true ? "yes" : "no"}`,
+        );
+
         const state = interceptStore.withTransaction(() => {
           const nextState = interceptStore.loadState(principalUserId);
           refreshTodayTokens(nextState);
@@ -852,6 +867,10 @@ const server = createServer(async (req, res) => {
             if (typeof event.state.completed === "boolean") {
               nextState.completed = event.state.completed;
             }
+
+            console.log(
+              `[cloud-server][intercept] event state patch user=${principalUserId} total=${nextState.total} running=${nextState.running} waiting=${nextState.waiting} completed=${nextState.completed ? "yes" : "no"}`,
+            );
           }
 
           if (event.toolCall && typeof event.toolCall === "object") {
@@ -883,6 +902,11 @@ const server = createServer(async (req, res) => {
 
           updateStateCounters(nextState);
           interceptStore.saveState(principalUserId, nextState);
+
+          console.log(
+            `[cloud-server][intercept] event persisted user=${principalUserId} total=${nextState.total} waiting=${nextState.waiting} running=${nextState.running} tokens=${nextState.tokens} today=${nextState.tokens_today} entries=${Array.isArray(nextState.entries) ? nextState.entries.length : 0} completed=${nextState.completed ? "yes" : "no"}`,
+          );
+
           return nextState;
         });
 

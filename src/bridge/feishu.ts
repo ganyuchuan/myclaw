@@ -6,6 +6,8 @@ import { config } from "../config.js";
 import { createGatewayClient } from "../gateway/gateway-client.js";
 import { buildFeishuReplyPayload } from "./reply-format.js";
 
+process.title = process.env.PROCESS_TITLE || "alimbo-feishu";
+
 type TenantAccessTokenResponse = {
   code?: number;
   msg?: string;

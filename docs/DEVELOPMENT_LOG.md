@@ -2,6 +2,33 @@
 
 ## 2026-05-29
 
+### 26) cloud 事件可观测性增强 + setup mock token estimate + 进程命名优化
+
+变更目标：
+- 提升 cloud `/api/copilot/intercepts/event` 处理链路的可观测性，便于定位“事件是否入库”。
+- 让 setup 的验证事件可直接驱动审批页 `Latest Token Estimate` 面板展示，便于联调验证。
+- 为 gateway / feishu / cloud 入口设置更清晰的进程名，便于在 PM2 与系统进程列表中识别。
+
+主要改动：
+- cloud 事件关键日志
+  - `src/cloud/intercept-server.ts`
+    - 在 `POST /api/copilot/intercepts/event` 增加关键时刻日志：
+      - 事件接收摘要（user/msg/entry/prompt/tokens/toolCall/tokenEstimate/statePatch/completed）
+      - `event.state` 应用后状态快照
+      - 落库后最终状态快照（total/waiting/running/tokens/tokens_today/entries/completed）
+- setup 事件补充 mock token estimate
+  - `src/setup.ts`
+    - `reportSetupInterceptVerificationEvent` 增加 `event.tokenEstimate`（sessionId/promptTokens/outputTokens/totalTokens/promptPreview/outputPreview/estimatedAtMs）
+    - 使用同一时间戳填充 `session.ts`，方便日志与界面对齐
+- 进程命名与启动参数
+  - `src/index.ts`、`src/bridge/feishu.ts`、`src/cloud/intercept-server.ts`
+    - 增加 `process.title` 默认值（支持 `PROCESS_TITLE` 覆盖）
+  - `package.json`
+    - `start`、`bridge:feishu`、`cloud` 启动脚本改为 `node --title=...`
+
+验证记录：
+- `npm run build`：通过
+
 ### 25) intercept 决策与事件上报共享化（copilot/claude/setup 统一行为）
 
 变更目标：

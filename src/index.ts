@@ -6,6 +6,8 @@ import { runCopilotWithSharedSession, stopCopilotClient } from "./agent-runtime/
 import { runAgentWithSharedSession } from "./agent-runtime/agent.js";
 import { looksLikeMarkdown } from "./bridge/reply-format.js";
 
+process.title = process.env.PROCESS_TITLE || "alimbo-gateway";
+
 function normalizeFeishuDomain(domain) {
   if (domain === "lark") {
     return Lark.Domain.Lark;
