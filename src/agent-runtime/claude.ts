@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import { createInterceptRequestIdFromCandidates, requestInterceptDecisionByApi } from "./intercept-decision.js";
+import { reportInterceptEventByApi } from "./intercept-event.js";
 import { estimateConversationTokenBreakdown, estimateToolCallTokens } from "./token-estimate.js";
 
 const DEFAULT_SHARED_SESSION_KEY = "__global__";
@@ -312,46 +314,6 @@ function mapToolNameForPolicy(toolName) {
   return map[normalized] || normalized;
 }
 
-function createInterceptRequestId(input) {
-  const candidates = [
-    input?.requestId,
-    input?.permissionRequestId,
-    input?.toolCallId,
-    input?.id,
-    input?.tool_use_id,
-  ];
-  for (const candidate of candidates) {
-    const normalized = String(candidate ?? "").trim();
-    if (normalized) {
-      return normalized;
-    }
-  }
-  return `perm_${crypto.randomUUID()}`;
-}
-
-async function fetchJsonWithTimeout(
-  url,
-  { method = "GET", headers = {}, body = undefined, timeoutMs = 5000 } = {},
-): Promise<unknown> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), toPositiveInt(timeoutMs, 5000));
-  try {
-    const response = await fetch(url, {
-      method,
-      headers,
-      body,
-      signal: controller.signal,
-    });
-    const payload = await response.json().catch(() => null) as any;
-    if (!response.ok) {
-      throw new Error(`http ${response.status}: ${String(payload?.error ?? response.statusText)}`);
-    }
-    return payload;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 function toPreToolHookOutput(hookEventName, permissionDecision, permissionDecisionReason = "") {
   return {
     hookSpecificOutput: {
@@ -369,20 +331,11 @@ async function reportClaudeHookEvent({ config, event, timeoutMs }) {
   }
 
   const interceptAuthToken = String(config.interceptAuthToken ?? "").trim();
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Accept: "application/json",
-  };
-
-  if (interceptAuthToken) {
-    headers.Authorization = `Bearer ${interceptAuthToken}`;
-  }
-
-  await fetchJsonWithTimeout(`${interceptServerUrl}/api/copilot/intercepts/event`, {
-    method: "POST",
-    headers,
-    timeoutMs,
-    body: JSON.stringify({ event }),
+  await reportInterceptEventByApi({
+    interceptServerUrl,
+    interceptAuthToken,
+    interceptTimeoutMs: timeoutMs,
+    event,
   });
 }
 
@@ -463,107 +416,31 @@ async function reportClaudeTokenEstimateEvent({
   });
 }
 
-async function pollInterceptDecision({
-  interceptServerUrl,
-  interceptAuthToken,
-  requestId,
-  interceptTimeoutMs,
-  interceptPollIntervalMs,
-  interceptMaxWaitMs,
-}) {
-  const startedAt = Date.now();
-  const headers: Record<string, string> = { Accept: "application/json" };
-  if (interceptAuthToken) {
-    headers.Authorization = `Bearer ${interceptAuthToken}`;
-  }
-
-  while (Date.now() - startedAt < interceptMaxWaitMs) {
-    const params = new URLSearchParams({ id: requestId });
-    const payload = await fetchJsonWithTimeout(
-      `${interceptServerUrl}/api/copilot/intercepts/decision?${params.toString()}`,
-      {
-        method: "GET",
-        headers,
-        timeoutMs: interceptTimeoutMs,
-      },
-    ) as any;
-
-    const status = normalizeDecision(payload?.status, "waiting");
-    const decision = normalizeDecision(payload?.decision, "wait");
-    if (["allow", "approved"].includes(decision) || status === "approved") {
-      return {
-        decision: "allow",
-        reason: payload?.reason || "approved by intercept server",
-      };
-    }
-
-    if (["deny", "denied", "expired", "timeout"].includes(decision) || ["denied", "expired", "timeout"].includes(status)) {
-      return {
-        decision: "deny",
-        reason: payload?.reason || `intercept ${status}`,
-      };
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, interceptPollIntervalMs));
-  }
-
-  return {
-    decision: "deny",
-    reason: `intercept decision timeout after ${interceptMaxWaitMs}ms`,
-  };
-}
-
 async function requestInterceptDecision({ input, toolName, config, workDir }) {
-  const interceptServerUrl = trimTrailingSlash(config.interceptServerUrl);
-  const interceptAuthToken = String(config.interceptAuthToken ?? "").trim();
-  const interceptTimeoutMs = toPositiveInt(config.interceptTimeoutMs, 5000);
-  const interceptPollIntervalMs = toPositiveInt(config.interceptPollIntervalMs, 1000);
-  const interceptMaxWaitMs = toPositiveInt(config.interceptMaxWaitMs, 30000);
-  const requestId = createInterceptRequestId(input);
-
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Accept: "application/json",
-  };
-  if (interceptAuthToken) {
-    headers.Authorization = `Bearer ${interceptAuthToken}`;
-  }
-
-  const payload = await fetchJsonWithTimeout(`${interceptServerUrl}/api/copilot/intercepts/pretool`, {
-    method: "POST",
-    headers,
-    timeoutMs: interceptTimeoutMs,
-    body: JSON.stringify({
-      request: {
-        id: requestId,
-        tool: toolName,
-        msg: `Intercepted tool ${toolName}`,
-        sessionId: String(input?.session_id ?? "").trim() || null,
-        workDir,
-        input: {
-          toolName,
-          toolArgs: safeCloneToolArgs(input?.tool_input),
-        },
-        ts: Date.now(),
+  return requestInterceptDecisionByApi({
+    interceptServerUrl: config.interceptServerUrl,
+    interceptAuthToken: config.interceptAuthToken,
+    interceptTimeoutMs: config.interceptTimeoutMs,
+    interceptPollIntervalMs: config.interceptPollIntervalMs,
+    interceptMaxWaitMs: config.interceptMaxWaitMs,
+    logPrefix: "[claude-agent-sdk][intercept]",
+    request: {
+      requestIdCandidates: [
+        input?.requestId,
+        input?.permissionRequestId,
+        input?.toolCallId,
+        input?.id,
+        input?.tool_use_id,
+      ],
+      toolName,
+      msg: `Intercepted tool ${toolName}`,
+      sessionId: String(input?.session_id ?? "").trim() || null,
+      workDir,
+      input: {
+        toolName,
+        toolArgs: safeCloneToolArgs(input?.tool_input),
       },
-    }),
-  }) as any;
-
-  const decision = normalizeDecision(payload?.decision, "deny");
-  if (decision !== "wait") {
-    return {
-      decision,
-      reason: payload?.reason || payload?.msg || "intercept decision",
-    };
-  }
-
-  return pollInterceptDecision({
-    interceptServerUrl,
-    interceptAuthToken,
-    requestId,
-    interceptTimeoutMs,
-    interceptPollIntervalMs,
-    interceptMaxWaitMs,
+    },
   });
 }
 
@@ -674,7 +551,13 @@ function buildClaudeHooks(config) {
           msg: `Tool ${toolName || "unknown"} completed`,
           entry: `Tool result: ${toolName || "unknown"}`,
           toolCall: {
-            id: String(input?.tool_use_id ?? createInterceptRequestId(input)).trim(),
+            id: createInterceptRequestIdFromCandidates([
+              input?.tool_use_id,
+              input?.requestId,
+              input?.permissionRequestId,
+              input?.toolCallId,
+              input?.id,
+            ]),
             sessionId,
             tool: toolName || "unknown",
             args: safeArgs,

@@ -1,5 +1,39 @@
 # Development Log
 
+## 2026-05-29
+
+### 25) intercept 决策与事件上报共享化（copilot/claude/setup 统一行为）
+
+变更目标：
+- 将 `interceptServerUrl` 的决策交互（pretool + decision 轮询）抽为共享模块，消除 copilot 与 claude 的重复实现。
+- 将 `/api/copilot/intercepts/event` 上报逻辑抽为共享模块，并让 copilot、claude、setup 复用同一请求行为。
+- 将 setup 中的上报调用从验证函数中解耦，改为在 `main` 中显式编排调用。
+
+主要改动：
+- 新增共享决策模块
+  - `src/agent-runtime/intercept-decision.ts`
+    - 新增 `requestInterceptDecisionByApi`（pretool 发起 + wait 轮询）。
+    - 新增 `createInterceptRequestIdFromCandidates`、`normalizeInterceptDecision`，统一 requestId 与决策语义。
+- 新增共享事件上报模块
+  - `src/agent-runtime/intercept-event.ts`
+    - 新增 `reportInterceptEventByApi`，统一封装 `/api/copilot/intercepts/event` 的鉴权、超时与请求发送。
+- 运行时接入统一模块
+  - `src/agent-runtime/copilot.ts`
+    - `onPreToolUse` 的决策请求改为复用 `requestInterceptDecisionByApi`。
+    - PostToolUse / Session 生命周期 / Token 估算事件上报改为复用 `reportInterceptEventByApi`。
+  - `src/agent-runtime/claude.ts`
+    - `PreToolUse` 决策路径改为复用 `requestInterceptDecisionByApi`。
+    - hook 事件上报改为复用 `reportInterceptEventByApi`。
+- setup 行为调整
+  - `src/setup.ts`
+    - 保留 `verifyInterceptDecisionApi` 作为决策链路验证。
+    - 新增 `reportSetupInterceptVerificationEvent` 封装 setup 验证完成后的事件上报。
+    - 在 `main` 中先执行验证，再显式调用事件上报方法。
+
+验证记录：
+- `npm run build`：通过
+- `node dist/setup.js`：通过
+
 ## 2026-05-28
 
 ### 24) cloud 鉴权字段统一 + setup 稳定性修复 + API 文档拆分

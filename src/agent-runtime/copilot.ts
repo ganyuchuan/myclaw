@@ -3,6 +3,8 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { getSkillDirectoriesForSession } from "../tool/skills.js";
 import { loadMcpServersForCopilot } from "../tool/mcp.js";
+import { requestInterceptDecisionByApi } from "./intercept-decision.js";
+import { reportInterceptEventByApi } from "./intercept-event.js";
 import { estimateConversationTokenBreakdown, estimateToolCallTokens } from "./token-estimate.js";
 
 const DEFAULT_SHARED_SESSION_KEY = "__global__";
@@ -236,17 +238,6 @@ const DEFAULT_DESTRUCTIVE_TOOLS = [
   "bash",
 ];
 
-type HttpErrorPayload = {
-  error?: string;
-};
-
-type InterceptDecisionPayload = {
-  status?: string;
-  decision?: string;
-  reason?: string;
-  msg?: string;
-};
-
 function normalizeSet(values, fallback = []) {
   const source = Array.isArray(values) && values.length > 0 ? values : fallback;
   return new Set(source.map((item) => String(item ?? "").trim().toLowerCase()).filter(Boolean));
@@ -325,22 +316,6 @@ function normalizeDecision(value, fallback = "deny") {
 
 function trimTrailingSlash(url) {
   return String(url ?? "").trim().replace(/\/+$/, "");
-}
-
-function createInterceptRequestId(input) {
-  const candidates = [
-    input?.requestId,
-    input?.permissionRequestId,
-    input?.toolCallId,
-    input?.id,
-  ];
-  for (const candidate of candidates) {
-    const normalized = String(candidate ?? "").trim();
-    if (normalized) {
-      return normalized;
-    }
-  }
-  return `perm_${crypto.randomUUID()}`;
 }
 
 function truncateString(value, maxLength = 240) {
@@ -531,30 +506,6 @@ function safeCloneToolArgs(toolArgs) {
   return walk(toolArgs);
 }
 
-async function fetchJsonWithTimeout(
-  url,
-  { method = "GET", headers = {}, body = undefined, timeoutMs = 5000 } = {},
-): Promise<unknown> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), toPositiveInt(timeoutMs, 5000));
-  try {
-    const response = await fetch(url, {
-      method,
-      headers,
-      body,
-      signal: controller.signal,
-    });
-    const payload = await response.json().catch(() => null);
-    if (!response.ok) {
-      const typedPayload = payload as HttpErrorPayload | null;
-      throw new Error(`http ${response.status}: ${String(typedPayload?.error ?? response.statusText)}`);
-    }
-    return payload;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 function mapInterceptDecisionToPermission(result, fallbackReason) {
   const decision = normalizeDecision(result?.decision, "deny");
   const reason = String(result?.reason ?? fallbackReason ?? "intercept decision").trim() || "intercept decision";
@@ -577,10 +528,6 @@ function mapInterceptDecisionToPermission(result, fallbackReason) {
     permissionDecision: "deny",
     permissionDecisionReason: reason,
   };
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
 }
 
 function shortId(value) {
@@ -705,43 +652,32 @@ async function reportPostToolUseEvent({ input, invocation, config, workDir }) {
   }
 
   const requestId = createPostToolRequestId(input, invocation);
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Accept: "application/json",
-  };
-
-  if (interceptAuthToken) {
-    headers.Authorization = `Bearer ${interceptAuthToken}`;
-  }
-
   const safeArgs = safeCloneToolArgs(input?.toolArgs);
   const safeResult = safeCloneToolArgs(input?.toolResult);
   const sessionId = String(invocation?.sessionId ?? input?.sessionId ?? "").trim();
 
-  await fetchJsonWithTimeout(`${interceptServerUrl}/api/copilot/intercepts/event`, {
-    method: "POST",
-    headers,
-    timeoutMs: interceptTimeoutMs,
-    body: JSON.stringify({
-      event: {
-        msg: `Tool ${toolName} completed`,
-        entry: `Tool result: ${toolName} (${requestId})`,
-        prompt: {
-          id: requestId,
-          tool: toolName,
-          hint: collectHumanReadableHint(toolName, safeArgs),
-        },
-        toolCall: {
-          id: requestId,
-          sessionId,
-          tool: toolName,
-          args: safeArgs,
-          result: safeResult,
-          ts: Date.now(),
-          workDir,
-        },
+  await reportInterceptEventByApi({
+    interceptServerUrl,
+    interceptAuthToken,
+    interceptTimeoutMs,
+    event: {
+      msg: `Tool ${toolName} completed`,
+      entry: `Tool result: ${toolName} (${requestId})`,
+      prompt: {
+        id: requestId,
+        tool: toolName,
+        hint: collectHumanReadableHint(toolName, safeArgs),
       },
-    }),
+      toolCall: {
+        id: requestId,
+        sessionId,
+        tool: toolName,
+        args: safeArgs,
+        result: safeResult,
+        ts: Date.now(),
+        workDir,
+      },
+    },
   });
 }
 
@@ -755,41 +691,30 @@ async function reportSessionLifecycleEvent({ phase, input, invocation, config, w
   const interceptTimeoutMs = toPositiveInt(config.interceptTimeoutMs, 5000);
   const requestId = createPostToolRequestId(input, invocation);
   const sessionId = String(invocation?.sessionId ?? input?.sessionId ?? "").trim();
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Accept: "application/json",
-  };
-
-  if (interceptAuthToken) {
-    headers.Authorization = `Bearer ${interceptAuthToken}`;
-  }
-
   const state = phase === "start" ? markSessionStart() : markSessionEnd();
   const entries = collectSessionEntries(input, invocation);
 
-  await fetchJsonWithTimeout(`${interceptServerUrl}/api/copilot/intercepts/event`, {
-    method: "POST",
-    headers,
-    timeoutMs: interceptTimeoutMs,
-    body: JSON.stringify({
-      event: {
-        msg: `Session ${phase}: ${sessionId || shortId(requestId)}`,
-        entry: `Session ${phase}: ${sessionId || shortId(requestId)}`,
-        state,
-        entries,
-        prompt: {
-          id: sessionId || requestId,
-          tool: "session",
-          hint: `Copilot session ${phase}`,
-        },
-        session: {
-          id: sessionId,
-          phase,
-          ts: Date.now(),
-          workDir,
-        },
+  await reportInterceptEventByApi({
+    interceptServerUrl,
+    interceptAuthToken,
+    interceptTimeoutMs,
+    event: {
+      msg: `Session ${phase}: ${sessionId || shortId(requestId)}`,
+      entry: `Session ${phase}: ${sessionId || shortId(requestId)}`,
+      state,
+      entries,
+      prompt: {
+        id: sessionId || requestId,
+        tool: "session",
+        hint: `Copilot session ${phase}`,
       },
-    }),
+      session: {
+        id: sessionId,
+        phase,
+        ts: Date.now(),
+        workDir,
+      },
+    },
   });
 }
 
@@ -827,200 +752,76 @@ async function reportSessionTokenEstimateEvent({
 
   const interceptAuthToken = String(config.interceptAuthToken ?? "").trim();
   const interceptTimeoutMs = toPositiveInt(config.interceptTimeoutMs, 5000);
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Accept: "application/json",
-  };
-
-  if (interceptAuthToken) {
-    headers.Authorization = `Bearer ${interceptAuthToken}`;
-  }
-
-  await fetchJsonWithTimeout(`${interceptServerUrl}/api/copilot/intercepts/event`, {
-    method: "POST",
-    headers,
-    timeoutMs: interceptTimeoutMs,
-    body: JSON.stringify({
-      event: {
-        msg: `Session tokens estimated (${status}): ${sessionId || "-"}`,
-        entry: `Session tokens estimated (${status}): ${sessionId || "-"} (${tokens})`,
-        tokens,
-        tokenEstimate: {
-          sessionId,
-          status,
-          promptTokens: breakdown.promptTokens,
-          outputTokens: breakdown.outputTokens,
-          toolCallCount: Math.max(0, Number(toolCallCount) || 0),
-          toolArgsTokens: Math.max(0, Number(toolArgsTokens) || 0),
-          toolResultTokens: Math.max(0, Number(toolResultTokens) || 0),
-          toolTokens,
-          contextCarryoverTokens: carryoverTokens,
-          requestOverheadTokens: overheadTokens,
-          turnTokens,
-          totalTokens: breakdown.totalTokens,
-          totalEstimatedTokens: tokens,
-          promptPreview: breakdown.promptPreview,
-          outputPreview: breakdown.outputPreview,
-          attempt,
-          retryPlanned,
-          failureReason: truncateString(failureReason, 240),
-          estimatedAtMs: Date.now(),
-        },
-        prompt: {
-          id: sessionId || `tokens_${crypto.randomUUID()}`,
-          tool: "session",
-          hint: `Estimated tokens for Copilot session (${status}): ${tokens}`,
-        },
-        session: {
-          id: sessionId,
-          phase: status === "failed" ? "token-estimate-failed" : "token-estimate",
-          ts: Date.now(),
-          workDir,
-        },
+  await reportInterceptEventByApi({
+    interceptServerUrl,
+    interceptAuthToken,
+    interceptTimeoutMs,
+    event: {
+      msg: `Session tokens estimated (${status}): ${sessionId || "-"}`,
+      entry: `Session tokens estimated (${status}): ${sessionId || "-"} (${tokens})`,
+      tokens,
+      tokenEstimate: {
+        sessionId,
+        status,
+        promptTokens: breakdown.promptTokens,
+        outputTokens: breakdown.outputTokens,
+        toolCallCount: Math.max(0, Number(toolCallCount) || 0),
+        toolArgsTokens: Math.max(0, Number(toolArgsTokens) || 0),
+        toolResultTokens: Math.max(0, Number(toolResultTokens) || 0),
+        toolTokens,
+        contextCarryoverTokens: carryoverTokens,
+        requestOverheadTokens: overheadTokens,
+        turnTokens,
+        totalTokens: breakdown.totalTokens,
+        totalEstimatedTokens: tokens,
+        promptPreview: breakdown.promptPreview,
+        outputPreview: breakdown.outputPreview,
+        attempt,
+        retryPlanned,
+        failureReason: truncateString(failureReason, 240),
+        estimatedAtMs: Date.now(),
       },
-    }),
+      prompt: {
+        id: sessionId || `tokens_${crypto.randomUUID()}`,
+        tool: "session",
+        hint: `Estimated tokens for Copilot session (${status}): ${tokens}`,
+      },
+      session: {
+        id: sessionId,
+        phase: status === "failed" ? "token-estimate-failed" : "token-estimate",
+        ts: Date.now(),
+        workDir,
+      },
+    },
   });
 }
 
-async function pollInterceptDecision({
-  interceptServerUrl,
-  interceptAuthToken,
-  requestId,
-  interceptTimeoutMs,
-  interceptPollIntervalMs,
-  interceptMaxWaitMs,
-}) {
-  const startedAt = Date.now();
-  let attempts = 0;
-  const headers: Record<string, string> = {
-    Accept: "application/json",
-  };
-
-  if (interceptAuthToken) {
-    headers.Authorization = `Bearer ${interceptAuthToken}`;
-  }
-
-  console.log(
-    `[copilot-sdk][intercept] poll start requestId=${shortId(requestId)} intervalMs=${interceptPollIntervalMs} maxWaitMs=${interceptMaxWaitMs}`,
-  );
-
-  while (Date.now() - startedAt < interceptMaxWaitMs) {
-    attempts += 1;
-    const params = new URLSearchParams({ id: requestId });
-    const payload = await fetchJsonWithTimeout(
-      `${interceptServerUrl}/api/copilot/intercepts/decision?${params.toString()}`,
-      {
-        method: "GET",
-        headers,
-        timeoutMs: interceptTimeoutMs,
-      },
-    ) as InterceptDecisionPayload;
-
-    const status = normalizeDecision(payload?.status, "waiting");
-    const decision = normalizeDecision(payload?.decision, "wait");
-    if (attempts === 1 || attempts % 5 === 0 || status !== "waiting") {
-      console.log(
-        `[copilot-sdk][intercept] poll tick requestId=${shortId(requestId)} attempt=${attempts} status=${status} decision=${decision}`,
-      );
-    }
-
-    if (["allow", "approved"].includes(decision) || status === "approved") {
-      console.log(
-        `[copilot-sdk][intercept] poll resolved allow requestId=${shortId(requestId)} attempts=${attempts} elapsedMs=${Date.now() - startedAt}`,
-      );
-      return {
-        decision: "allow",
-        reason: payload?.reason || "approved by intercept server",
-      };
-    }
-
-    if (["deny", "denied", "expired", "timeout"].includes(decision) || ["denied", "expired", "timeout"].includes(status)) {
-      console.log(
-        `[copilot-sdk][intercept] poll resolved deny requestId=${shortId(requestId)} attempts=${attempts} status=${status} elapsedMs=${Date.now() - startedAt}`,
-      );
-      return {
-        decision: "deny",
-        reason: payload?.reason || `intercept ${status}`,
-      };
-    }
-
-    await sleep(interceptPollIntervalMs);
-  }
-
-  console.warn(
-    `[copilot-sdk][intercept] poll timeout requestId=${shortId(requestId)} attempts=${attempts} elapsedMs=${Date.now() - startedAt}`,
-  );
-
-  return {
-    decision: "deny",
-    reason: `intercept decision timeout after ${interceptMaxWaitMs}ms`,
-  };
-}
-
 async function requestInterceptDecision({ input, toolName, config, workDir }) {
-  const interceptServerUrl = trimTrailingSlash(config.interceptServerUrl);
-  const interceptAuthToken = String(config.interceptAuthToken ?? "").trim();
-  const interceptTimeoutMs = toPositiveInt(config.interceptTimeoutMs, 5000);
-  const interceptPollIntervalMs = toPositiveInt(config.interceptPollIntervalMs, 1000);
-  const interceptMaxWaitMs = toPositiveInt(config.interceptMaxWaitMs, 30000);
-  const requestId = createInterceptRequestId(input);
-
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Accept: "application/json",
-  };
-  if (interceptAuthToken) {
-    headers.Authorization = `Bearer ${interceptAuthToken}`;
-  }
-
-  console.log(
-    `[copilot-sdk][intercept] pretool send requestId=${shortId(requestId)} tool=${toolName} server=${interceptServerUrl}`,
-  );
-
-  const payload = await fetchJsonWithTimeout(`${interceptServerUrl}/api/copilot/intercepts/pretool`, {
-    method: "POST",
-    headers,
-    timeoutMs: interceptTimeoutMs,
-    body: JSON.stringify({
-      request: {
-        id: requestId,
-        tool: toolName,
-        hint: collectHumanReadableHint(toolName, input?.toolArgs),
-        msg: `Intercepted tool ${toolName}`,
-        sessionId: String(input?.sessionId ?? "").trim() || null,
-        workDir,
-        input: {
-          toolName,
-          toolArgs: safeCloneToolArgs(input?.toolArgs),
-          metadata: safeCloneToolArgs(input?.metadata),
-        },
-        ts: Date.now(),
+  return requestInterceptDecisionByApi({
+    interceptServerUrl: config.interceptServerUrl,
+    interceptAuthToken: config.interceptAuthToken,
+    interceptTimeoutMs: config.interceptTimeoutMs,
+    interceptPollIntervalMs: config.interceptPollIntervalMs,
+    interceptMaxWaitMs: config.interceptMaxWaitMs,
+    logPrefix: "[copilot-sdk][intercept]",
+    request: {
+      requestIdCandidates: [
+        input?.requestId,
+        input?.permissionRequestId,
+        input?.toolCallId,
+        input?.id,
+      ],
+      toolName,
+      hint: collectHumanReadableHint(toolName, input?.toolArgs),
+      msg: `Intercepted tool ${toolName}`,
+      sessionId: String(input?.sessionId ?? "").trim() || null,
+      workDir,
+      input: {
+        toolName,
+        toolArgs: safeCloneToolArgs(input?.toolArgs),
+        metadata: safeCloneToolArgs(input?.metadata),
       },
-    }),
-  }) as InterceptDecisionPayload;
-
-  const decision = normalizeDecision(payload?.decision, "deny");
-  console.log(
-    `[copilot-sdk][intercept] pretool decision requestId=${shortId(requestId)} tool=${toolName} decision=${decision}`,
-  );
-  if (decision !== "wait") {
-    return {
-      decision,
-      reason: payload?.reason || payload?.msg || "intercept decision",
-    };
-  }
-
-  console.log(
-    `[copilot-sdk][intercept] pretool queued requestId=${shortId(requestId)} tool=${toolName} entering=poll`,
-  );
-
-  return pollInterceptDecision({
-    interceptServerUrl,
-    interceptAuthToken,
-    requestId,
-    interceptTimeoutMs,
-    interceptPollIntervalMs,
-    interceptMaxWaitMs,
+    },
   });
 }
 

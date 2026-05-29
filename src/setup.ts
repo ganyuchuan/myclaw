@@ -6,6 +6,8 @@ import path from "node:path";
 import process from "node:process";
 import readline from "node:readline/promises";
 import { fileURLToPath } from "node:url";
+import { requestInterceptDecisionByApi } from "./agent-runtime/intercept-decision.js";
+import { reportInterceptEventByApi } from "./agent-runtime/intercept-event.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -127,6 +129,85 @@ async function waitForGatewayHealth({ baseUrl, timeoutMs }: { baseUrl: string; t
   throw new Error(`gateway health check timeout after ${timeoutMs}ms`);
 }
 
+async function verifyInterceptDecisionApi({
+  cloudBaseUrl,
+  authToken,
+  workDir,
+}: {
+  cloudBaseUrl: string;
+  authToken: string;
+  workDir: string;
+}) {
+  const result = await requestInterceptDecisionByApi({
+    interceptServerUrl: cloudBaseUrl,
+    interceptAuthToken: authToken,
+    interceptTimeoutMs: 20000,
+    interceptPollIntervalMs: 3000,
+    interceptMaxWaitMs: 60000,
+    logPrefix: "[alimbo-setup][intercept]",
+    request: {
+      requestIdCandidates: [`setup_${Date.now()}`],
+      toolName: "setup.healthcheck",
+      hint: "setup decision api connectivity check",
+      msg: "Setup intercept decision connectivity check",
+      sessionId: "setup",
+      workDir,
+      input: {
+        toolName: "setup.healthcheck",
+        source: "alimbo-setup",
+      },
+    },
+  });
+
+  const decision = String(result?.decision ?? "").trim().toLowerCase() || "deny";
+  const reason = String(result?.reason ?? "").trim();
+  console.log(`[alimbo-setup] Intercept decision API reachable (decision=${decision}${reason ? `, reason=${reason}` : ""})`);
+
+  return {
+    requestId: String(result?.requestId ?? `setup_${Date.now()}`),
+    decision,
+    reason,
+  };
+}
+
+async function reportSetupInterceptVerificationEvent({
+  cloudBaseUrl,
+  authToken,
+  workDir,
+  verification,
+}: {
+  cloudBaseUrl: string;
+  authToken: string;
+  workDir: string;
+  verification: {
+    requestId: string;
+    decision: string;
+    reason: string;
+  };
+}) {
+  await reportInterceptEventByApi({
+    interceptServerUrl: cloudBaseUrl,
+    interceptAuthToken: authToken,
+    interceptTimeoutMs: 5000,
+    event: {
+      msg: "Setup intercept verification completed",
+      entry: `Setup intercept verification: decision=${verification.decision}`,
+      prompt: {
+        id: verification.requestId,
+        tool: "setup.healthcheck",
+        hint: verification.reason || "setup decision api connectivity check",
+      },
+      session: {
+        id: "setup",
+        phase: "setup-intercept-verify",
+        ts: Date.now(),
+        workDir,
+      },
+      completed: true,
+    },
+  });
+}
+
 function startGatewayDetached(cwd: string) {
   const target = path.resolve(__dirname, "index.js");
   const child = spawn(process.execPath, [target], {
@@ -233,6 +314,19 @@ async function main() {
       timeoutMs: 20_000,
     });
     console.log("[alimbo-setup] Gateway is healthy");
+
+    const verification = await verifyInterceptDecisionApi({
+      cloudBaseUrl,
+      authToken: token,
+      workDir: cwd,
+    });
+
+    await reportSetupInterceptVerificationEvent({
+      cloudBaseUrl,
+      authToken: token,
+      workDir: cwd,
+      verification,
+    });
 
     console.log("[alimbo-setup] Success");
     console.log(JSON.stringify({
